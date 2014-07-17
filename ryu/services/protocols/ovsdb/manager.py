@@ -21,6 +21,8 @@ from ryu.contrib.ovs import jsonrpc
 from ryu.contrib.ovs import reconnect
 from ryu.contrib.ovs import stream
 from ryu.contrib.ovs import timeval
+from ryu.contrib.ovs import vlog
+from ryu.contrib.ovs.db import idl
 from ryu.lib import hub
 #from ryu.controller import handler
 
@@ -32,113 +34,105 @@ opts = [cfg.StrOpt('address', default='0.0.0.0',
 
 cfg.CONF.register_opts(opts, 'ovsdb')
 
-ECHO = 'echo'
+# NOTE(jkoelker) Oh vlog...
+vlog.Vlog.__inited = True
+vlog.Vlog.__start_time = vlog.datetime.datetime.utcnow()
+
+
+# NOTE(jkoelker) Wrap ovs's Idl to accept an existing session
+class Idl(idl.Idl):
+    def __init__(self, session, schema):
+        if not isinstance(schema, idl.SchemaHelper):
+            schema = idl.SchemaHelper(schema_json=schema)
+            schema.register_all()
+        schema = schema.get_idl_schema()
+
+        self.tables = schema.tables
+        self._db = schema
+        self._session = session
+        self._monitor_request_id = None
+        self._last_seqno = None
+        self.change_seqno = 0
+
+        # Database locking.
+        self.lock_name = None          # Name of lock we need, None if none.
+        self.has_lock = False          # Has db server said we have the lock?
+        self.is_lock_contended = False  # Has db server said we can't get lock?
+        self._lock_request_id = None   # JSON-RPC ID of in-flight lock request.
+
+        # Transaction support.
+        self.txn = None
+        self._outstanding_txns = {}
+
+        for table in schema.tables.itervalues():
+            for column in table.columns.itervalues():
+                if not hasattr(column, 'alert'):
+                    column.alert = True
+            table.need_table = False
+            table.rows = {}
+            table.idl = self
 
 
 class Client(object):
     def __init__(self, app, name, sock):
+        self._stream = stream.Stream(sock, name, None)
+        self._connection = jsonrpc.Connection(self._stream)
+
         self._fsm = reconnect.Reconnect(timeval.msec())
         self._fsm.set_name('%s:%s' % name)
         self._fsm.enable(name)
         self._fsm.set_passive(True, timeval.msec())
-
-        self._stream = stream.Stream(sock, name, None)
-        self._connection = jsonrpc.Connection(self._stream)
-        self._fsm.connected(timeval.msec())
+        self._fsm.set_max_tries(-1)
+        self._session = None
+        self._idl = None
 
         self._app = app
         self._transacts = {}
         self.active = False
 
-    def logger(self, msg, level='error'):
-        func = getattr(self._app.logger, level)
-        func(msg)
+    def _bootstrap_schemas(self):
+        req = jsonrpc.Message.create_request('list_dbs', [])
+        error, reply = self._connection.transact_block(req)
 
-    def _debug(self, level='error', **kwargs):
-        msg = ' '.join('|%s: %s|' % item for item in kwargs.iteritems())
-        self.logger(msg, level)
+        if error or reply.error:
+            # TODO(jkoelker) Error handling
+            return
 
-    def _setup(self):
-        self.active = True
-        r = jsonrpc.Message.create_request('list_dbs', [])
-        self._transacts[r.id] = lambda s, m: self._debug(status=s,
-                                                         msg=m)
-        self._connection.send(r)
+        schemas = []
+        for db in reply.result:
+            if db != 'Open_vSwitch':
+                continue
 
-    def _run(self):
-        backlog = self._connection.get_backlog()
-        self._connection.run()
+            req = jsonrpc.Message.create_request('get_schema', [db])
+            error, reply = self._connection.transact_block(req)
 
-        if self._connection.get_backlog() < backlog:
-            self._fsm.activity(timeval.msec())
+            if error or reply.error:
+                # TODO(jkoelker) Error handling
+                continue
 
-    def _recv(self):
-        received_bytes = self._connection.get_received_bytes()
-        status, msg = self._connection.recv()
+            schemas.append(reply.result)
 
-        if received_bytes != self._connection.get_received_bytes():
-            self._fsm.activity(timeval.msec())
-
-        return status, msg
-
-    def _handle(self, status, msg):
-        if msg is None:
-            self.logger('MSG is None', 'debug')
-
-        elif (msg.type == jsonrpc.Message.T_REQUEST and
-                msg.method == ECHO):
-            self.logger('PING->PONG', 'debug')
-            reply = jsonrpc.Message.create_reply(msg.params, msg.id)
-            self._connection.send(reply)
-
-        elif msg.type == jsonrpc.Message.T_REPLY and msg.id == ECHO:
-            pass
-
-        elif (msg.id in self._transacts and
-                msg.type in (jsonrpc.Message.T_REPLY,
-                             jsonrpc.Message.T_ERROR)):
-            self.logger('Transact', 'debug')
-            func = self._transacts[msg.id]
-            del self._transacts[msg.id]
-            func(status, msg)
-
-        else:
-            self._debug(status, msg)
+        if schemas:
+            return schemas[0]
 
     def start(self):
-        if not self.active:
-            self._setup()
+        schema = self._bootstrap_schemas()
 
+        if not schema:
+            return
+
+        self._fsm.connected(timeval.msec())
+        self._session = jsonrpc.Session(self._fsm, self._connection)
+        self._idl = Idl(self._session, schema)
+
+        self.active = True
         while True:
-            self._run()
-            status, msg = self._recv()
-
-            if status == jsonrpc.EOF:
-                self.stop()
-                return
-
-            self._handle(status, msg)
-
-            action = self._fsm.run(timeval.msec())
-            if action:
-                if action == reconnect.PROBE:
-                    req = jsonrpc.Message.create_request(ECHO, [])
-                    req.id = ECHO
-                    self._connection.send(req)
-
-                elif action == reconnect.DISCONNECT:
-                    self._fsm.disconnected(timeval.msec(), 0)
-                    self.stop()
-                    return
-
-                else:
-                    self.logger('Action: %s' % action, 'debug')
-
-            self._app.logger.debug('')
+            self._idl.run()
 
     def stop(self):
-        self._connection.error(jsonrpc.EOF)
-        self._connection.close()
+        if self._idl:
+            self._idl.close()
+
         self.active = False
 
 
