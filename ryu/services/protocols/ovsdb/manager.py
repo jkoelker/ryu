@@ -13,16 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import weakref
+
+# NOTE(jkoelker) Patch Vlog so that is uses standard logging
+from ovs import vlog
+
+
+class Vlog(vlog.Vlog):
+    def __init__(self, name):
+        self.log = logging.getLogger('ovs.%s' % name)
+
+    def __log(self, level, message, **kwargs):
+        level = vlog.LEVELS.get(level, logging.DEBUG)
+        self.log.log(level, message, **kwargs)
+
+vlog.Vlog = Vlog
+
 
 from ryu import cfg
 from ryu.base import app_manager
-from ryu.contrib.ovs import jsonrpc
-from ryu.contrib.ovs import reconnect
-from ryu.contrib.ovs import stream
-from ryu.contrib.ovs import timeval
-from ryu.contrib.ovs import vlog
-from ryu.contrib.ovs.db import idl
+from ovs import jsonrpc
+from ovs import reconnect
+from ovs import stream
+from ovs import timeval
+from ovs.db import idl
 from ryu.lib import hub
 #from ryu.controller import handler
 
@@ -33,10 +48,6 @@ opts = [cfg.StrOpt('address', default='0.0.0.0',
                    help='OVSDB port')]
 
 cfg.CONF.register_opts(opts, 'ovsdb')
-
-# NOTE(jkoelker) Oh vlog...
-vlog.Vlog.__inited = True
-vlog.Vlog.__start_time = vlog.datetime.datetime.utcnow()
 
 
 # NOTE(jkoelker) Wrap ovs's Idl to accept an existing session
@@ -91,6 +102,9 @@ class Client(object):
         self.active = False
 
     def _bootstrap_schemas(self):
+        # NOTE(jkoelker) currently only the Open_vSwitch schema
+        #                is supported.
+        # TODO(jkoelker) support arbitrary schemas
         req = jsonrpc.Message.create_request('list_dbs', [])
         error, reply = self._connection.transact_block(req)
 
