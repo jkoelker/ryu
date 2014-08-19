@@ -36,16 +36,19 @@ from ovs import stream
 from ovs import timeval
 from ovs.db import idl
 
+from ryu.services.protocols.ovsdb import event
+
 
 # NOTE(jkoelker) Wrap ovs's Idl to accept an existing session, and
 #                trigger callbacks on changes
 class Idl(idl.Idl):
-    def __init__(self, session, schema):
+    def __init__(self, session, schema, client):
         if not isinstance(schema, idl.SchemaHelper):
             schema = idl.SchemaHelper(schema_json=schema)
             schema.register_all()
         schema = schema.get_idl_schema()
 
+        self._client = client
         self.tables = schema.tables
         self._db = schema
         self._session = session
@@ -72,11 +75,30 @@ class Idl(idl.Idl):
             table.idl = self
 
     def __process_update(self, table, uuid, old, new):
-        return idl.Idl(self, table, uuid, old, new)
+        old_row = table.rows.get(uuid)
+        changed = idl.Idl.__process_update(self, table, uuid, old, new)
+
+        if changed and self._client.system_id:
+            system_id = self._client.system_id
+
+            if not new:
+                ev = event.EventDatumDelete(system_id, old_row)
+
+            elif not old:
+                new_row = table.rows.get(uuid)
+                ev = event.EventDatumInsert(system_id, new_row)
+
+            else:
+                new_row = table.rows.get(uuid)
+                ev = event.EventDatumUpdate(system_id, old_row, new_row)
+
+            self._client._app.send_event_to_observers(ev)
+
+        return changed
 
 
 class Client(object):
-    def __init__(self, app, name, sock):
+    def __init__(self, app, name, sock, callback=None):
         self._stream = stream.Stream(sock, name, None)
         self._connection = jsonrpc.Connection(self._stream)
 
@@ -87,11 +109,11 @@ class Client(object):
         self._fsm.set_max_tries(-1)
         self._session = None
         self._idl = None
-        self._dps = set()
 
         self._app = app
+        self._callback = callback
         self._transacts = {}
-        self.active = False
+        self.system_id = None
 
     def _bootstrap_schemas(self):
         # NOTE(jkoelker) currently only the Open_vSwitch schema
@@ -121,27 +143,17 @@ class Client(object):
         if schemas:
             return schemas[0]
 
-    def _bridges(self):
-        dps = set()
-
-        for bridge in self._idl.tables['Bridge'].itervalues():
-            dp = bridge.datapath_id
-            dps.add(dp)
-
-            if dp not in self._dps:
-                self._dps.add(dp)
-                self._notify(tt, bridge)
-
-        for dp in (self._dps - dps):
-            self._notify(ttm, dp)
-
-    def _notify(self, event_type, obj):
-        event = event_type.from_obj(obj)
-        self._app.logger
-        pass
-
     def _transactions(self):
         pass
+
+    def _set_system_id(self):
+        openvswitch = self._idl.tables['Open_vSwitch'].rows
+
+        if openvswitch:
+            row = openvswitch.get(openvswitch.keys()[0])
+            self.system_id = row.external_ids.get('system-id')
+            if self._callback:
+                self._callback(self)
 
     def start(self):
         schema = self._bootstrap_schemas()
@@ -151,16 +163,17 @@ class Client(object):
 
         self._fsm.connected(timeval.msec())
         self._session = jsonrpc.Session(self._fsm, self._connection)
-        self._idl = Idl(self._session, schema)
+        self._idl = Idl(self._session, schema, client=self)
 
-        self.active = True
         while True:
             self._idl.run()
-            self._bridges()
+
+            if self.system_id is None:
+                self._set_system_id()
+
             self._transactions()
 
     def stop(self):
         if self._idl:
             self._idl.close()
-
-        self.active = False
+            self._idl = None
