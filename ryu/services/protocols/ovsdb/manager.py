@@ -37,13 +37,24 @@ class OVSDB(app_manager.RyuApp):
         self._address = self.CONF.ovsdb.address
         self._port = self.CONF.ovsdb.port
         self._clients = weakref.WeakValueDictionary()
+        self._started_clients = []
 
     def _accept(self, server):
+        append = self._started_clients.append
+        remove = self._started_clients.remove
+
         while True:
             sock, client_address = server.accept()
-            c = client.Client(self, client_address, sock)
-            self._clients[client_address] = c
-            hub.spawn(c.start)
+            c = client.Client(self, client_address, sock,
+                              callback=self._system_id_callback)
+            append(weakref.proxy(c, lambda v: remove(v)))
+            self.threads.append(hub.spawn(c.start))
+
+    def _system_id_callback(self, client, system_id=None):
+        if system_id is None:
+            system_id = client.system_id
+
+        self._clients[system_id] = client
 
     def start(self):
         self._server = hub.listen((self._address, self._port))
@@ -55,6 +66,9 @@ class OVSDB(app_manager.RyuApp):
         clients = self._clients.items()
 
         for name, client in clients:
+            client.stop()
+
+        for client in self._started_clients:
             client.stop()
 
         super(OVSDB, self).stop()
