@@ -39,6 +39,14 @@ from ovs.db import idl
 from ryu.services.protocols.ovsdb import event
 
 
+def dictify(row):
+    if row is None:
+        return row
+
+    return dict([(k, v.to_python(idl._uuid_to_row))
+                 for k, v in row._data.iteritems()])
+
+
 # NOTE(jkoelker) Wrap ovs's Idl to accept an existing session, and
 #                trigger callbacks on changes
 class Idl(idl.Idl):
@@ -76,21 +84,24 @@ class Idl(idl.Idl):
 
     def __process_update(self, table, uuid, old, new):
         old_row = table.rows.get(uuid)
+
         changed = idl.Idl.__process_update(self, table, uuid, old, new)
 
         if changed and self._client.system_id:
             system_id = self._client.system_id
 
             if not new:
-                ev = event.EventDatumDelete(system_id, old_row)
+                ev = event.EventDatumDelete(system_id, dictify(old_row))
 
             elif not old:
                 new_row = table.rows.get(uuid)
-                ev = event.EventDatumInsert(system_id, new_row)
+                ev = event.EventDatumInsert(system_id, dictify(new_row))
 
             else:
                 new_row = table.rows.get(uuid)
-                ev = event.EventDatumUpdate(system_id, old_row, new_row)
+                ev = event.EventDatumUpdate(system_id,
+                                            dictify(old_row),
+                                            dictify(new_row))
 
             self._client._app.send_event_to_observers(ev)
 
