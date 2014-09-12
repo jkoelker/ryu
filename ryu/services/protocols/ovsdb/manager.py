@@ -36,6 +36,7 @@ class OVSDB(app_manager.RyuApp):
         super(OVSDB, self).__init__(*args, **kwargs)
         self._address = self.CONF.ovsdb.address
         self._port = self.CONF.ovsdb.port
+
         self._clients = weakref.WeakValueDictionary()
         self._started_clients = []
 
@@ -47,8 +48,11 @@ class OVSDB(app_manager.RyuApp):
             # TODO(jkoelker) SSL Certificate check
             # TODO(jkoelker) Whitelist addresses
             sock, client_address = server.accept()
+            self.logger.debug('New connection from %s:%s' % client_address)
+
             c = client.Client(self, client_address, sock,
                               callback=self._system_id_callback)
+
             append(weakref.proxy(c, lambda v: remove(v)))
             self.threads.append(hub.spawn(c.start))
 
@@ -56,10 +60,14 @@ class OVSDB(app_manager.RyuApp):
         if system_id is None:
             system_id = client.system_id
 
+        self.logger.debug('System_id for client at %s:%s is %s' %
+                          (client.address[0], client.addres[1], system_id))
         self._clients[system_id] = client
 
     def start(self):
         self._server = hub.listen((self._address, self._port))
+        self.logger.info('Listening on %s:%s for clients' % (self._address,
+                                                             self._port))
         t = hub.spawn(self._accept, self._server)
         super(OVSDB, self).start()
         return t
@@ -68,7 +76,8 @@ class OVSDB(app_manager.RyuApp):
         clients = self._clients.items()
 
         for system_id, client in clients:
-            self.logger.info('Stopping client for system %s' % system_id)
+            self.logger.info('Stopping client for system %s at %s:%s' %
+                             (system_id, client.address[0], client.address[1]))
             client.stop()
 
         for client in self._started_clients:
