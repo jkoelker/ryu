@@ -39,6 +39,9 @@ from ovs.db import idl
 from ryu.services.protocols.ovsdb import event
 
 
+now = timeval.msec
+
+
 def dictify(row):
     if row is None:
         return row
@@ -109,20 +112,22 @@ class Idl(idl.Idl):
 
 
 class Client(object):
-    def __init__(self, app, name, sock, callback=None):
-        self._stream = stream.Stream(sock, name, None)
-        self._connection = jsonrpc.Connection(self._stream)
-
-        self._fsm = reconnect.Reconnect(timeval.msec())
-        self._fsm.set_name('%s:%s' % name)
-        self._fsm.enable(name)
-        self._fsm.set_passive(True, timeval.msec())
-        self._fsm.set_max_tries(-1)
-        self._session = None
-        self._idl = None
-
+    def __init__(self, app, address, sock, callback=None):
         self._app = app
         self._callback = callback
+        self.address = address
+
+        self._stream = stream.Stream(sock, self.address, None)
+        self._connection = jsonrpc.Connection(self._stream)
+
+        self._fsm = reconnect.Reconnect(now())
+        self._fsm.set_name('%s:%s' % self.address)
+        self._fsm.enable(now())
+        self._fsm.set_passive(True, now())
+        self._fsm.set_max_tries(-1)
+
+        self._session = None
+        self._idl = None
         self._transacts = {}
         self.system_id = None
 
@@ -172,7 +177,7 @@ class Client(object):
         if not schema:
             return
 
-        self._fsm.connected(timeval.msec())
+        self._fsm.connected(now())
         self._session = jsonrpc.Session(self._fsm, self._connection)
         self._idl = Idl(self._session, schema, client=self)
 
