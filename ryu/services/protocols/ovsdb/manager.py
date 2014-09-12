@@ -44,6 +44,8 @@ class OVSDB(app_manager.RyuApp):
         remove = self._started_clients.remove
 
         while True:
+            # TODO(jkoelker) SSL Certificate check
+            # TODO(jkoelker) Whitelist addresses
             sock, client_address = server.accept()
             c = client.Client(self, client_address, sock,
                               callback=self._system_id_callback)
