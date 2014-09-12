@@ -65,10 +65,13 @@ class OVSDB(app_manager.RyuApp):
     def stop(self):
         clients = self._clients.items()
 
-        for name, client in clients:
+        for system_id, client in clients:
+            self.logger.info('Stopping client for system %s' % system_id)
             client.stop()
 
         for client in self._started_clients:
+            self.logger.info('Stopping client for connection %s:%s' %
+                             client.address)
             client.stop()
 
         super(OVSDB, self).stop()
