@@ -15,7 +15,6 @@
 
 import weakref
 
-
 from ryu import cfg
 from ryu.base import app_manager
 from ryu.lib import hub
