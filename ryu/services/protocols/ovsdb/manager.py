@@ -60,7 +60,7 @@ class OVSDB(app_manager.RyuApp):
             system_id = client.system_id
 
         self.logger.debug('System_id for client at %s:%s is %s' %
-                          (client.address[0], client.addres[1], system_id))
+                          (client.address[0], client.address[1], system_id))
         self._clients[system_id] = client
 
     def start(self):
