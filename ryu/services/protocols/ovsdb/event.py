@@ -17,37 +17,60 @@ from ryu.controller import event
 from ryu.controller import handler
 
 
-class EventDatumBase(event.EventBase):
-    def __init__(self, system_id, datum):
+class EventRowBase(event.EventBase):
+    def __init__(self, system_id, table, row):
         super(event.EventBase, self).__init__()
         self.system_id = system_id
-        self.datum = datum
+        self.table = table
+        self.row = row
 
     def __str__(self):
-        return '%s<system_id=%s type=%s>' % (self.__class__.__name__,
-                                             self.system_id,
-                                             self.datum.type)
+        return '%s<system_id=%s table=%s, uuid=%s>' % (self.__class__.__name__,
+                                                       self.system_id,
+                                                       self.table,
+                                                       self.row['_uuid'])
 
 
-class EventDatumDelete(EventDatumBase):
+class EventRowDelete(EventRowBase):
     pass
 
 
-class EventDatumInsert(EventDatumBase):
+class EventRowInsert(EventRowBase):
     pass
 
 
-class EventDatumUpdate(event.EventBase):
-    def __init__(self, system_id, old, new):
+class EventRowUpdate(event.EventBase):
+    def __init__(self, system_id, table, old, new):
         super(event.EventBase, self).__init__()
         self.system_id = system_id
+        self.table = table
         self.old = old
         self.new = new
 
     def __str__(self):
-        return '%s<system_id=%s type=%s>' % (self.__class__.__name__,
-                                             self.system_id,
-                                             self.old.type)
+        return '%s<system_id=%s table=%s, uuid=%s>' % (self.__class__.__name__,
+                                                       self.system_id,
+                                                       self.table,
+                                                       self.old['_uuid'])
+
+
+class EventModifyRequest(event.EventRequestBase):
+    def __init__(self, system_id, txn):
+        super(event.EventRequestBase, self).__init__()
+        self.system_id = system_id
+        self.txn = txn
+
+#        self.rows = []
+#        add = self.rows.append
+#
+#        for table in txn:
+#            for row in txn[table]:
+#                row_uuid = row.pop('_uuid', None)
+#
+#                if not row_uuid:
+#                    row_uuid = uuid.uuid4()
+#
+#                add((table, row_uuid, row))
 
 
 handler.register_service('ryu.services.protocols.ovsdb.manager')

@@ -37,6 +37,7 @@ from ovs import timeval
 from ovs.db import idl
 
 from ryu.services.protocols.ovsdb import event
+from ryu.services.protocols.ovsdb import model
 
 
 now = timeval.msec
@@ -44,7 +45,7 @@ now = timeval.msec
 
 def dictify(row):
     if row is None:
-        return row
+        return {}
 
     return dict([(k, v.to_python(idl._uuid_to_row))
                  for k, v in row._data.iteritems()])
@@ -94,17 +95,23 @@ class Idl(idl.Idl):
             system_id = self._client.system_id
 
             if not new:
-                ev = event.EventDatumDelete(system_id, dictify(old_row))
+                old_row = model.Row(dictify(old_row))
+                old_row['_uuid'] = uuid
+                ev = event.EventRowDelete(system_id, table, old_row)
 
             elif not old:
-                new_row = table.rows.get(uuid)
-                ev = event.EventDatumInsert(system_id, dictify(new_row))
+                new_row = model.Row(dictify(table.rows.get(uuid)))
+                new_row['_uuid'] = uuid
+                ev = event.EventRowInsert(system_id, table, new_row)
 
             else:
-                new_row = table.rows.get(uuid)
-                ev = event.EventDatumUpdate(system_id,
-                                            dictify(old_row),
-                                            dictify(new_row))
+                old_row = model.Row(dictify(old_row))
+                old_row['_uuid'] = uuid
+
+                new_row = model.Row(dictify(table.rows.get(uuid)))
+                new_row['_uuid'] = uuid
+
+                ev = event.EventRowUpdate(system_id, table, old_row, new_row)
 
             self._client._app.send_event_to_observers(ev)
 
