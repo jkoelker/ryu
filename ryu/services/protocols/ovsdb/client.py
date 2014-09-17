@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
 import logging
 
 # NOTE(jkoelker) Patch Vlog so that is uses standard logging
@@ -36,6 +37,8 @@ from ovs import stream
 from ovs import timeval
 from ovs.db import idl
 
+from ryu.base import app_manager
+from ryu.lib import hub
 from ryu.services.protocols.ovsdb import event
 from ryu.services.protocols.ovsdb import model
 
@@ -54,13 +57,16 @@ def dictify(row):
 # NOTE(jkoelker) Wrap ovs's Idl to accept an existing session, and
 #                trigger callbacks on changes
 class Idl(idl.Idl):
-    def __init__(self, session, schema, client):
+    def __init__(self, session, schema):
         if not isinstance(schema, idl.SchemaHelper):
             schema = idl.SchemaHelper(schema_json=schema)
             schema.register_all()
+
         schema = schema.get_idl_schema()
 
-        self._client = client
+        # NOTE(jkoelker) event buffer
+        self._events = []
+
         self.tables = schema.tables
         self._db = schema
         self._session = session
@@ -86,23 +92,27 @@ class Idl(idl.Idl):
             table.rows = {}
             table.idl = self
 
+    @property
+    def events(self):
+        events = self._events
+        self._events = []
+        return events
+
     def __process_update(self, table, uuid, old, new):
         old_row = table.rows.get(uuid)
 
         changed = idl.Idl.__process_update(self, table, uuid, old, new)
 
-        if changed and self._client.system_id:
-            system_id = self._client.system_id
-
+        if changed:
             if not new:
                 old_row = model.Row(dictify(old_row))
                 old_row['_uuid'] = uuid
-                ev = event.EventRowDelete(system_id, table, old_row)
+                ev = (event.EventRowDelete, (table, old_row))
 
             elif not old:
                 new_row = model.Row(dictify(table.rows.get(uuid)))
                 new_row['_uuid'] = uuid
-                ev = event.EventRowInsert(system_id, table, new_row)
+                ev = (event.EventRowInsert, (table, new_row))
 
             else:
                 old_row = model.Row(dictify(old_row))
@@ -111,94 +121,157 @@ class Idl(idl.Idl):
                 new_row = model.Row(dictify(table.rows.get(uuid)))
                 new_row['_uuid'] = uuid
 
-                ev = event.EventRowUpdate(system_id, table, old_row, new_row)
+                ev = (event.EventRowUpdate, (table, old_row, new_row))
 
-            self._client._app.send_event_to_observers(ev)
+            self._events.append(ev)
 
         return changed
 
 
-class Client(object):
-    def __init__(self, app, address, sock, callback=None):
-        self._app = app
-        self._callback = callback
-        self.address = address
+def discover_schemas(connection):
+    # NOTE(jkoelker) currently only the Open_vSwitch schema
+    #                is supported.
+    # TODO(jkoelker) support arbitrary schemas
+    req = jsonrpc.Message.create_request('list_dbs', [])
+    error, reply = connection.transact_block(req)
 
-        self._stream = stream.Stream(sock, self.address, None)
-        self._connection = jsonrpc.Connection(self._stream)
+    if error or reply.error:
+        # TODO(jkoelker) Error handling
+        return
 
-        self._fsm = None
-        self._session = None
-        self._idl = None
-        self._transacts = {}
-        self.system_id = None
+    schemas = []
+    for db in reply.result:
+        if db != 'Open_vSwitch':
+            continue
 
-    def _bootstrap_schemas(self):
-        # NOTE(jkoelker) currently only the Open_vSwitch schema
-        #                is supported.
-        # TODO(jkoelker) support arbitrary schemas
-        req = jsonrpc.Message.create_request('list_dbs', [])
-        error, reply = self._connection.transact_block(req)
+        req = jsonrpc.Message.create_request('get_schema', [db])
+        error, reply = connection.transact_block(req)
 
         if error or reply.error:
             # TODO(jkoelker) Error handling
-            return
+            continue
 
-        schemas = []
-        for db in reply.result:
-            if db != 'Open_vSwitch':
-                continue
+        schemas.append(reply.result)
 
-            req = jsonrpc.Message.create_request('get_schema', [db])
-            error, reply = self._connection.transact_block(req)
+    return schemas
 
-            if error or reply.error:
-                # TODO(jkoelker) Error handling
-                continue
 
-            schemas.append(reply.result)
+def discover_system_id(idl):
+    system_id = None
 
-        if schemas:
-            return schemas[0]
-
-    def _transactions(self):
-        pass
-
-    def _set_system_id(self):
-        openvswitch = self._idl.tables['Open_vSwitch'].rows
+    while system_id is None:
+        idl.run()
+        openvswitch = idl.tables['Open_vSwitch'].rows
 
         if openvswitch:
             row = openvswitch.get(openvswitch.keys()[0])
-            self.system_id = row.external_ids.get('system-id')
-            if self._callback:
-                self._callback(self)
+            system_id = row.external_ids.get('system-id')
 
-    def start(self):
-        self._fsm = reconnect.Reconnect(now())
-        self._fsm.set_name('%s:%s' % self.address)
-        self._fsm.enable(now())
-        self._fsm.set_passive(True, now())
-        self._fsm.set_max_tries(-1)
-        schema = self._bootstrap_schemas()
+    return system_id
 
-        if not schema:
+
+class RemoteOvsdb(app_manager.RyuApp):
+    @classmethod
+    def factory(cls, sock, address, *args, **kwargs):
+        ovs_stream = stream.Stream(sock, None, None)
+        connection = jsonrpc.Connection(ovs_stream)
+        schemas = discover_schemas(connection)
+
+        if not schemas:
             return
 
-        self._fsm.connected(now())
-        self._session = jsonrpc.Session(self._fsm, self._connection)
-        self._idl = Idl(self._session, schema, client=self)
+        fsm = reconnect.Reconnect(now())
+        fsm.set_name('%s:%s' % address)
+        fsm.enable(now())
+        fsm.set_passive(True, now())
+        fsm.set_max_tries(-1)
+        fsm.connected(now())
 
-        while True:
-            self._idl.run()
+        session = jsonrpc.Session(fsm, connection)
+        idl = Idl(session, schemas[0])
 
-            if self.system_id is None:
-                self._set_system_id()
+        system_id = discover_system_id(idl)
+        name = cls.instance_name(system_id)
+        ovs_stream.name = name
+        connection.name = name
+        fsm.set_name(name)
 
-            self._transactions()
+        kwargs = kwargs.copy()
+        kwargs['address'] = address
+        kwargs['idl'] = idl
+        kwargs['name'] = name
+        kwargs['system_id'] = system_id
+
+        app_mgr = app_manager.AppManager.get_instance()
+        return app_mgr.instantiate(cls, *args, **kwargs)
+
+    @classmethod
+    def instance_name(cls, system_id):
+        return '%s-%s' % (cls.__name__, system_id)
+
+    def __init__(self, *args, **kwargs):
+        super(RemoteOvsdb, self).__init__(*args, **kwargs)
+        self.address = kwargs['address']
+        self._idl = kwargs['idl']
+        self.system_id = kwargs['system_id']
+        self.name = kwargs['name']
+        self._txn_q = collections.deque()
+
+    def _event_proxy_loop(self):
+        while self.is_active:
+            events = self._idl.events
+
+            if not events:
+                hub.sleep(0.1)
+                continue
+
+            for event in events:
+                ev = event[0]
+                args = event[1]
+                self.send_event_to_observers(ev(self.system_id, *args))
+
+            hub.sleep(0)
+
+    def _idl_loop(self):
+        while self.is_active:
+            try:
+                self._idl.run()
+                self._transactions()
+            except Exception:
+                self.logger.exception('Error running IDL for system_id %s' %
+                                      self.system_id)
+                break
+
+            hub.sleep(0)
+
+    def _run_thread(self, func, *args, **kwargs):
+        try:
+            func(*args, **kwargs)
+
+        finally:
+            self.stop()
+
+    def _transactions(self):
+        if not self._txn_q:
+            return
+
+    def modify_request_handler(self, ev):
+        txn = ev.txn
+
+        if not isinstance(txn, model.Transaction):
+            txn = model.Transaction(txn)
+
+        txn._uuidize()
+        self._txn_q.append((txn, ev))
+
+    def start(self):
+        super(RemoteOvsdb, self).start()
+        t = hub.spawn(self._run_thread, self._idl_loop)
+        self.threads.append(t)
+
+        t = hub.spawn(self._run_thread, self._event_proxy_loop)
+        self.threads.append(t)
 
     def stop(self):
-        if self._idl:
-            self._idl.close()
-            self._idl = None
-            self._fsm = None
-            self._session = None
+        super(RemoteOvsdb, self).stop()
+        self._idl.close()
