@@ -16,10 +16,19 @@
 import uuid
 
 
-class Row(dict):
+class _UUIDDict(dict):
     def _uuidize(self):
         if '_uuid' not in self or self['_uuid'] is None:
             self['_uuid'] = uuid.uuid4()
+
+    @property
+    def uuid(self):
+        self._uuidize()
+        return self['_uuid']
+
+
+class Row(_UUIDDict):
+    pass
 
 
 class Table(dict):
@@ -35,8 +44,8 @@ class Table(dict):
             row = Row(row)
 
         row._uuidize()
-        self[row['_uuid']] = row
+        self[row.uuid] = row
 
 
-class Transaction(dict):
+class Transaction(_UUIDDict):
     pass

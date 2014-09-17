@@ -57,6 +57,13 @@ class EventRowUpdate(event.EventBase):
 class EventModifyRequest(event.EventRequestBase):
     def __init__(self, system_id, txn):
         super(event.EventRequestBase, self).__init__()
+        self.dst = 'OVSDB'
+        self.system_id = system_id
+        self.txn = txn
+
+
+class EventModifyReply(event.EventReplyBase):
+    def __init__(self, system_id, txn):
         self.system_id = system_id
         self.txn = txn
 
@@ -73,4 +80,4 @@ class EventModifyRequest(event.EventRequestBase):
 #                add((table, row_uuid, row))
 
 
-handler.register_service('ryu.services.protocols.ovsdb.manager')
+#handler.register_service('ryu.services.protocols.ovsdb.manager')

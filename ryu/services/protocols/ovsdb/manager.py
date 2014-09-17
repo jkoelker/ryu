@@ -13,13 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import weakref
-
 from ryu import cfg
 from ryu.base import app_manager
 from ryu.lib import hub
 from ryu.services.protocols.ovsdb import client
-#from ryu.controller import handler
+from ryu.services.protocols.ovsdb import event
+from ryu.controller import handler
 
 
 opts = [cfg.StrOpt('address', default='0.0.0.0',
@@ -35,33 +34,33 @@ class OVSDB(app_manager.RyuApp):
         super(OVSDB, self).__init__(*args, **kwargs)
         self._address = self.CONF.ovsdb.address
         self._port = self.CONF.ovsdb.port
-
-        self._clients = weakref.WeakValueDictionary()
-        self._started_clients = []
+        self._clients = {}
 
     def _accept(self, server):
-        append = self._started_clients.append
-        remove = self._started_clients.remove
-
         while True:
             # TODO(jkoelker) SSL Certificate check
             # TODO(jkoelker) Whitelist addresses
             sock, client_address = server.accept()
             self.logger.debug('New connection from %s:%s' % client_address)
+            t = hub.spawn(self._start_remote, sock, client_address)
+            self.threads.append(t)
 
-            c = client.Client(self, client_address, sock,
-                              callback=self._system_id_callback)
+    def _proxy_event(self, ev):
+        system_id = ev.system_id
+        client_name = client.RemoteOvsdb.instance_name(system_id)
 
-            append(weakref.proxy(c, lambda v: remove(v)))
-            self.threads.append(hub.spawn(c.start))
+        if client_name not in self._clients:
+            self.logger.info('Unknown remote system_id %s' % system_id)
+            return
 
-    def _system_id_callback(self, client, system_id=None):
-        if system_id is None:
-            system_id = client.system_id
+        return self.send_event(client_name, ev)
 
-        self.logger.debug('System_id for client at %s:%s is %s' %
-                          (client.address[0], client.address[1], system_id))
-        self._clients[system_id] = client
+    def _start_remote(self, sock, client_address):
+        app = client.RemoteOvsdb.factory(sock, client_address)
+
+        if app:
+            self._clients[app.name] = app
+            app.start()
 
     def start(self):
         self._server = hub.listen((self._address, self._port))
@@ -72,16 +71,22 @@ class OVSDB(app_manager.RyuApp):
         return t
 
     def stop(self):
-        clients = self._clients.items()
+        clients = self._clients.values()
 
-        for system_id, client in clients:
-            self.logger.info('Stopping client for system %s at %s:%s' %
-                             (system_id, client.address[0], client.address[1]))
-            client.stop()
-
-        for client in self._started_clients:
-            self.logger.info('Stopping client for connection %s:%s' %
-                             client.address)
+        for client in clients:
             client.stop()
 
         super(OVSDB, self).stop()
+
+    @handler.set_ev_cls(event.EventModifyRequest)
+    def modify_request_handler(self, ev):
+
+        system_id = ev.system_id
+        client_name = client.RemoteOvsdb.instance_name(system_id)
+        remote = self._clients.get(client_name)
+
+        if not remote:
+            self.logger.info('Unknown remote system_id %s' % system_id)
+            return
+
+        return remote.modify_request_handler(ev)
