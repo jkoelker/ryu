@@ -127,12 +127,7 @@ class Client(object):
         self._stream = stream.Stream(sock, self.address, None)
         self._connection = jsonrpc.Connection(self._stream)
 
-        self._fsm = reconnect.Reconnect(now())
-        self._fsm.set_name('%s:%s' % self.address)
-        self._fsm.enable(now())
-        self._fsm.set_passive(True, now())
-        self._fsm.set_max_tries(-1)
-
+        self._fsm = None
         self._session = None
         self._idl = None
         self._transacts = {}
@@ -179,6 +174,11 @@ class Client(object):
                 self._callback(self)
 
     def start(self):
+        self._fsm = reconnect.Reconnect(now())
+        self._fsm.set_name('%s:%s' % self.address)
+        self._fsm.enable(now())
+        self._fsm.set_passive(True, now())
+        self._fsm.set_max_tries(-1)
         schema = self._bootstrap_schemas()
 
         if not schema:
@@ -200,3 +200,5 @@ class Client(object):
         if self._idl:
             self._idl.close()
             self._idl = None
+            self._fsm = None
+            self._session = None
