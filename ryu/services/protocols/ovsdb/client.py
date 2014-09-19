@@ -54,6 +54,70 @@ def dictify(row):
                  for k, v in row._data.iteritems()])
 
 
+def build_transaction(idl_obj, txn_req):
+    txn = idl.Transaction(idl_obj)
+
+    for table in txn_req:
+        for row in txn_req[table]:
+            row_obj = idl_obj.rows.get(row.uuid)
+
+            if row.delete:
+                if row_obj:
+                    row_obj.delete()
+
+                continue
+
+            if not row_obj:
+                row_obj = txn.insert(table, row.uuid)
+
+            for column, value in row.iteritems():
+                setattr(row_obj, column, value)
+
+    return txn
+
+
+def discover_schemas(connection):
+    # NOTE(jkoelker) currently only the Open_vSwitch schema
+    #                is supported.
+    # TODO(jkoelker) support arbitrary schemas
+    req = jsonrpc.Message.create_request('list_dbs', [])
+    error, reply = connection.transact_block(req)
+
+    if error or reply.error:
+        # TODO(jkoelker) Error handling
+        return
+
+    schemas = []
+    for db in reply.result:
+        if db != 'Open_vSwitch':
+            continue
+
+        req = jsonrpc.Message.create_request('get_schema', [db])
+        error, reply = connection.transact_block(req)
+
+        if error or reply.error:
+            # TODO(jkoelker) Error handling
+            continue
+
+        schemas.append(reply.result)
+
+    return schemas
+
+
+def discover_system_id(idl):
+    system_id = None
+
+    while system_id is None:
+        idl.run()
+        openvswitch = idl.tables['Open_vSwitch'].rows
+
+        if openvswitch:
+            row = openvswitch.get(openvswitch.keys()[0])
+            system_id = row.external_ids.get('system-id')
+
+    return system_id
+
+
 # NOTE(jkoelker) Wrap ovs's Idl to accept an existing session, and
 #                trigger callbacks on changes
 class Idl(idl.Idl):
@@ -126,48 +190,6 @@ class Idl(idl.Idl):
             self._events.append(ev)
 
         return changed
-
-
-def discover_schemas(connection):
-    # NOTE(jkoelker) currently only the Open_vSwitch schema
-    #                is supported.
-    # TODO(jkoelker) support arbitrary schemas
-    req = jsonrpc.Message.create_request('list_dbs', [])
-    error, reply = connection.transact_block(req)
-
-    if error or reply.error:
-        # TODO(jkoelker) Error handling
-        return
-
-    schemas = []
-    for db in reply.result:
-        if db != 'Open_vSwitch':
-            continue
-
-        req = jsonrpc.Message.create_request('get_schema', [db])
-        error, reply = connection.transact_block(req)
-
-        if error or reply.error:
-            # TODO(jkoelker) Error handling
-            continue
-
-        schemas.append(reply.result)
-
-    return schemas
-
-
-def discover_system_id(idl):
-    system_id = None
-
-    while system_id is None:
-        idl.run()
-        openvswitch = idl.tables['Open_vSwitch'].rows
-
-        if openvswitch:
-            row = openvswitch.get(openvswitch.keys()[0])
-            system_id = row.external_ids.get('system-id')
-
-    return system_id
 
 
 class RemoteOvsdb(app_manager.RyuApp):
@@ -254,6 +276,22 @@ class RemoteOvsdb(app_manager.RyuApp):
     def _transactions(self):
         if not self._txn_q:
             return
+
+        # NOTE(jkoelker) possibly run multiple transactions per loop?
+        self._transaction()
+
+    def _transaction(self):
+        txn_req, req = self._txn_q.popleft()
+        txn = build_transaction(self._idl, txn_req)
+        status = txn.commit_block()
+
+        if status in (idl.Transaction.SUCCESS, idl.Transaction.UNCHANGED):
+            for rows in txn_req.itervalues():
+                for row in rows:
+                    row.ovs_uuid = txn.get_insert_uuid(row.uuid)
+
+        rep = event.EventModifyReply(self.system_id, txn, status)
+        self.reply_to_request(req, rep)
 
     def modify_request_handler(self, ev):
         txn = ev.txn

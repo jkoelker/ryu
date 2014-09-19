@@ -63,9 +63,10 @@ class EventModifyRequest(event.EventRequestBase):
 
 
 class EventModifyReply(event.EventReplyBase):
-    def __init__(self, system_id, txn):
+    def __init__(self, system_id, txn, status):
         self.system_id = system_id
         self.txn = txn
+        self.status = status
 
 #        self.rows = []
 #        add = self.rows.append

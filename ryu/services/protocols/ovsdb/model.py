@@ -26,9 +26,30 @@ class _UUIDDict(dict):
         self._uuidize()
         return self['_uuid']
 
+    @uuid.setter
+    def uuid(self, value):
+        self['_uuid'] = value
+
+    @property
+    def ovs_uuid(self):
+        return self.get('_ovs_uuid')
+
+    @ovs_uuid.setter
+    def ovs_uuid(self, value):
+        self['_ovs_uuid'] = value
+
 
 class Row(_UUIDDict):
-    pass
+    @property
+    def delete(self):
+        if '_delete' in self and self['_delete']:
+            return True
+
+        return False
+
+    @delete.setter
+    def delete(self, value):
+        self['_delete'] = value
 
 
 class Table(dict):
