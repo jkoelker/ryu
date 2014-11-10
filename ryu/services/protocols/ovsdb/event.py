@@ -81,4 +81,4 @@ class EventModifyReply(event.EventReplyBase):
 #                add((table, row_uuid, row))
 
 
-#handler.register_service('ryu.services.protocols.ovsdb.manager')
+# handler.register_service('ryu.services.protocols.ovsdb.manager')
