@@ -26,8 +26,8 @@ import abc
 import six
 import struct
 import copy
-import netaddr
 import numbers
+import socket
 
 from ryu.ofproto.ofproto_parser import msg_pack_into
 from ryu.lib.stringify import StringifyMixin
@@ -573,6 +573,7 @@ class RouteFamily(StringifyMixin):
         return cmp((other.afi, other.safi), (self.afi, self.safi))
 
 # Route Family Singleton
+RF_EVPN = RouteFamily(addr_family.L2VPN, subaddr_family.EVPN)
 RF_IPv4_UC = RouteFamily(addr_family.IP, subaddr_family.UNICAST)
 RF_IPv6_UC = RouteFamily(addr_family.IP6, subaddr_family.UNICAST)
 RF_IPv4_VPN = RouteFamily(addr_family.IP, subaddr_family.MPLS_VPN)
@@ -589,7 +590,8 @@ _rf_map = {
     (addr_family.IP6, subaddr_family.MPLS_VPN): RF_IPv6_VPN,
     (addr_family.IP, subaddr_family.MPLS_LABEL): RF_IPv4_MPLS,
     (addr_family.IP6, subaddr_family.MPLS_LABEL): RF_IPv6_MPLS,
-    (addr_family.IP, subaddr_family.ROUTE_TARGET_CONSTRTAINS): RF_RTC_UC
+    (addr_family.IP, subaddr_family.ROUTE_TARGET_CONSTRTAINS): RF_RTC_UC,
+    (addr_family.L2VPN, subaddr_family.EVPN): RF_EVPN,
 }
 
 
@@ -1095,9 +1097,401 @@ class RouteTargetMembershipNLRI(StringifyMixin):
         # RT Nlri is 12 octets
         return struct.pack('B', (8 * 12)) + rt_nlri
 
+
+class EVPNNLRI(StringifyMixin, _TypeDisp):
+    """EVPN NRLI
+
+    The EVPN NLRI is advertised in BGP UPDATE messages using
+    the MP_REACH_NLRI and MP_UNREACH_NLRI attributes.
+
+    +-----------------------------------+
+    |    Route Type (1 octet)           |
+    +-----------------------------------+
+    |     Length (1 octet)              |
+    +-----------------------------------+
+    | Route Type specific (variable)    |
+    +-----------------------------------+
+    """
+
+    _PACK_FMT = struct.Struct('!BB')
+
+    ETHERNET_AUTO_DISCOVER = 1
+    MAC_IP = 2
+    INCLUSIVE_MULTICAST_ETHERNET_TAG = 3
+    ETHERNET_SEGMENT = 4
+
+    def __init__(self, route_type, route):
+        self.route_type = route_type
+        self.route = route
+
+    def __cmp__(self, other):
+        return cmp(self.route, other.route)
+
+    @property
+    def formatted_nlri_str(self):
+        return "%s:%s" % (self.route_type, self.route.formatted_nlri_str)
+
+    @classmethod
+    def parser(cls, buf):
+        route_type, length = cls._PACK_FMT.unpack_from(buffer(buf))
+        route_specific_payload = buf[cls._PACK_FMT.size:length]
+        rest = buf[length:]
+        route_type_cls = cls._lookup_type(route_type)
+        print route_type
+        print '-----'
+        return route_type_cls.parser(route_specific_payload), rest
+
+    def seialize(self):
+        route_buf = self.route.serialize()
+        nlri = self._PACK_FMT.pack(self.route_type,
+                                   chr(len(route_buf)))
+        return nlri + route_buf
+
+
+class _EthernetSegmentId(_TypeDisp):
+    _TYPE_FMT = struct.Struct('!B')
+
+    ARBITRARY = 0
+    LACP = 1
+    BRIDGED = 2
+    MAC = 3
+    ROUTER_ID = 4
+    AS_NUMBER = 5
+
+    def __init__(self, esi_type, esi):
+        self.esi_type = esi_type
+        self.esi = esi
+
+    @classmethod
+    def parser(cls, buf):
+        (esi_type, ) = cls._TYPE_FMT.unpack_from(buffer(buf))
+        value = buf[cls._TYPE_FMT.size:10]
+        esi_type_cls = cls._lookup_type(esi_type)
+        return cls(esi_type, esi_type_cls.parser(value))
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.ARBITRARY)
+class ESIArbitrary(object):
+    _PACK_FMT = struct.Struct('!9B')
+
+    def __init__(self, value):
+        self.value = value
+
+    @classmethod
+    def parser(cls, buf):
+        value = cls._PACK_FMT.unpack_from(buffer(buf))[0]
+        return cls(value)
+
+    def serialize(self):
+        return bytearray(self._PACK_FMT.pack(*self.value))
+
+
+class _ESIMacKey(object):
+    _PACK_FMT = struct.Struct('!6sHB')
+
+    def __init__(self, mac, key):
+        self._mac = mac
+        self._key = key
+
+    @classmethod
+    def parser(cls, buf):
+        mac, key, zero = cls._PACK_FMT.unpack_from(buffer(buf))
+        return cls(addrconv.mac.bin_to_text(mac), key)
+
+    def serialize(self):
+        mac = addrconv.mac.text_to_bin(self._mac)
+        buf = bytearray(self._PACK_FMT.pack(mac, self._key, 0))
+        return buf
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.LACP)
+class ESILacp(_ESIMacKey):
+    @property
+    def system_mac(self):
+        return self._mac
+
+    @property
+    def port_key(self):
+        return self._key
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.BRIDGED)
+class ESIBridged(_ESIMacKey):
+    @property
+    def root_bridge(self):
+        return self._mac
+
+    @property
+    def priority(self):
+        return self._key
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.MAC)
+class ESIMac(object):
+    _PACK_FMT = struct.Struct('!6sI')
+
+    def __init__(self, mac, ld):
+        self.mac = mac
+        self.ld = ld
+
+    @classmethod
+    def parser(cls, buf):
+        mac, ld = cls._PACK_FMT.unpack_from(buffer(buf[:6] + '\x00' + buf[7:]))
+        return cls(addrconv.mac.bin_to_text(mac), ld)
+
+    def serialize(self):
+        mac = addrconv.mac.text_to_bin(self.mac)
+        buf = self._PACK_FMT.pack(mac, self.ld)
+        return bytearray(buf[:6] + buf[7:])
+
+
+class _ESIKeyLocalDiscriminator(object):
+    _PACK_FMT = struct.Struct('!IIB')
+
+    def __init__(self, key, ld):
+        self._key = key
+        self.ld = ld
+
+    @classmethod
+    def parser(cls, buf):
+        key, ld, zero = cls._PACK_FMT.unpack_from(buffer(buf))
+        return cls(key, ld)
+
+    def serialize(self):
+        buf = bytearray(self._PACK_FMT.pack(self._key, self.ld, 0))
+        return buf
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.ROUTER_ID)
+class ESIRouter(_ESIKeyLocalDiscriminator):
+    @property
+    def router_id(self):
+        return self._key
+
+
+@_EthernetSegmentId.register_type(_EthernetSegmentId.AS_NUMBER)
+class ESIAsNumber(_ESIKeyLocalDiscriminator):
+    @property
+    def as_number(self):
+        return self._key
+
+
+class _MPLSLabels(object):
+    _PACK_FMT = struct.Struct('!I')
+
+    def __init__(self, *labels):
+        self.labels = list(labels)
+
+    @classmethod
+    def parser(cls, buf):
+        labels = []
+        add = labels.append
+
+        while len(buf) >= 3:
+            (label,) = cls._PACK_FMT.unpack_from('\x00' + buf[:3])
+            add(label)
+            buf = buf[3:]
+
+        return cls(*labels)
+
+    def serailize(self):
+        buf = []
+        add = buf.append
+
+        for label in self.labels:
+            label_buf = self._PACK_FMT.pack(label)
+            add(label_buf[1:])
+
+        return buffer(''.join(buf))
+
+
+@EVPNNLRI.register_type(EVPNNLRI.ETHERNET_AUTO_DISCOVER)
+class EVPNEthernetAutoDiscover(object):
+    _ETAG_PACK_FMT = struct.Struct('!I')
+
+    def __init__(self, route_dist, esi, etag, label):
+        self.route_dist = route_dist
+        self.esi = esi
+        self.etag = etag
+        self.label = label
+
+    @classmethod
+    def parser(cls, buf):
+        rd_buf = buf[:8]
+        esi_buf = buf[8:18]
+        etag_buf = buf[18:22]
+        mpls_buf = buf[22:]
+
+        rd = _RouteDistinguisher.parser(rd_buf)
+        esi = _EthernetSegmentId.parser(esi_buf)
+        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+        label = _MPLSLabels.parser(mpls_buf)
+
+        return cls(rd, esi, etag, label)
+
+    def serialize(self):
+        rd_buf = self.route_dist.serialize()
+        esi_buf = self.esi.serialize()
+        etag_buf = self._ETAG_PACK_FMT.pack(self.etag)
+        mpls_buf = self.label.serialize()
+        return bytearray(rd_buf + esi_buf + etag_buf + mpls_buf)
+
+
+@EVPNNLRI.register_type(EVPNNLRI.MAC_IP)
+class EVPNMAC_IP(object):
+    _ETAG_PACK_FMT = struct.Struct('!I')
+
+    def __init__(self, route_dist, esi, etag, mac, label, ip=None):
+        self.route_dist = route_dist
+        self.esi = esi
+        self.etag = etag
+        self.mac = mac
+        self.ip = ip
+        self.label = label
+
+    @classmethod
+    def parser(cls, buf):
+        rd_buf = buf[:8]
+        buf = buf[8:]
+
+        esi_buf = buf[:10]
+        buf = buf[10:]
+
+        etag_buf = buf[:4]
+        buf = buf[4:]
+
+        mac_len = ord(buf[0]) / 8
+        buf = buf[1:]
+
+        mac_buf = buf[:mac_len]
+        buf = buf[mac_len:]
+
+        ip_len = ord(buf[0]) / 8
+        buf = buf[1:]
+
+        if ip_len > 0:
+            ip_buf = buf[:ip_len]
+
+            if ip_len == 4:
+                ip = addrconv.ipv4.bin_to_text(ip_buf)
+            else:
+                ip = addrconv.ipv6.bin_to_text(ip_buf)
+
+            buf = buf[ip_len:]
+
+        else:
+            ip = None
+
+        rd = _RouteDistinguisher.parser(rd_buf)
+        esi = _EthernetSegmentId.parser(esi_buf)
+        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+        mac = addrconv.mac.bin_to_text(mac_buf)
+        label = _MPLSLabels.parser(buf)
+        print label.labels
+        return cls(rd, esi, etag, mac, label, ip=ip)
+
+    def serialize(self):
+        rd_buf = self.route_dist.serialize()
+        esi_buf = self.esi.serialize()
+        etag_buf = self._ETAG_PACK_FMT.pack(self.etag)
+        mac_buf = '\x06' + addrconv.mac.text_to_bin(self.mac)
+
+        if self.ip:
+            # TODO (jkoelker) Should self.ip just be a netaddr obj?
+            if ':' in self.ip:
+                ip_buf = chr(128) + addrconv.ipv6.text_to_bin(self.ip)
+            else:
+                ip_buf = chr(32) + addrconv.ipv4.text_to_bin(self.ip)
+
+        else:
+            ip_buf = ''
+
+        mpls_buf = self.label.serialize()
+
+        return bytearray(rd_buf + esi_buf + etag_buf + mac_buf +
+                         ip_buf + mpls_buf)
+
+
+@EVPNNLRI.register_type(EVPNNLRI.INCLUSIVE_MULTICAST_ETHERNET_TAG)
+class EVPNInclusiveMulticastEthernetTag(object):
+    _ETAG_PACK_FMT = struct.Struct('!I')
+
+    def __init__(self, route_dist, etag, ip):
+        self.route_dist = route_dist
+        self.etag = etag
+        self.ip = ip
+
+    @classmethod
+    def parser(cls, buf):
+        rd_buf = buf[:8]
+        etag_buf = buf[8:12]
+        ip_len = ord(buf[12])
+        ip_buf = buf[13:]
+
+        rd = _RouteDistinguisher.parser(rd_buf)
+        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+
+        if ip_len == 32:
+            ip = addrconv.ipv4.bin_to_text(ip_buf)
+        else:
+            ip = addrconv.ipv6.bin_to_text(ip_buf)
+
+        return cls(rd, etag, ip)
+
+    def serialize(self):
+        rd_buf = self.route_dist.serialize()
+        etag_buf = self._ETAG_PACK_FMT.pack(self.etag)
+
+        # TODO (jkoelker) Should self.ip just be a netaddr obj?
+        if ':' in self.ip:
+            ip_buf = chr(128) + addrconv.ipv6.text_to_bin(self.ip)
+        else:
+            ip_buf = chr(32) + addrconv.ipv4.text_to_bin(self.ip)
+
+        return bytearray(rd_buf + etag_buf + ip_buf)
+
+
+@EVPNNLRI.register_type(EVPNNLRI.ETHERNET_SEGMENT)
+class EVPNEthernetSegment(object):
+    def __init__(self, route_dist, esi, ip):
+        self.route_dist = route_dist
+        self.esi = esi
+        self.ip = ip
+
+    @classmethod
+    def parser(cls, buf):
+        rd_buf = buf[:8]
+        esi_buf = buf[8:18]
+        ip_len = ord(buf[18])
+        ip_buf = buf[19:]
+
+        rd = _RouteDistinguisher.parser(rd_buf)
+        esi = _EthernetSegmentId.parser(esi_buf)
+
+        if ip_len == 32:
+            ip = addrconv.ipv4.bin_to_text(ip_buf)
+        else:
+            ip = addrconv.ipv6.bin_to_text(ip_buf)
+
+        return cls(rd, esi, ip)
+
+    def serialize(self):
+        rd_buf = self.route_dist.serialize()
+        esi_buf = self.esi.serialize()
+
+        # TODO (jkoelker) Should self.ip just be a netaddr obj?
+        if ':' in self.ip:
+            ip_buf = chr(128) + addrconv.ipv6.text_to_bin(self.ip)
+        else:
+            ip_buf = chr(32) + addrconv.ipv4.text_to_bin(self.ip)
+
+        return bytearray(rd_buf + esi_buf + ip_buf)
+
+
 _addr_class_key = lambda x: (x.afi, x.safi)
 
 _ADDR_CLASSES = {
+    _addr_class_key(RF_EVPN): EVPNNLRI,
     _addr_class_key(RF_IPv4_UC): IPAddrPrefix,
     _addr_class_key(RF_IPv6_UC): IP6AddrPrefix,
     _addr_class_key(RF_IPv4_MPLS): LabelledIPAddrPrefix,
@@ -1262,7 +1656,6 @@ class BGPOptParamCapabilityGracefulRestart(_OptParamCapability):
     def serialize_cap_value(self):
         buf = bytearray()
         msg_pack_into(self._CAP_PACK_STR, buf, 0, self.flags << 12 | self.time)
-        tuples = self.tuples
         i = 0
         offset = 2
         for i in self.tuples:
