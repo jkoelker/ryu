@@ -193,6 +193,10 @@ class Idl(idl.Idl):
 
 
 class RemoteOvsdb(app_manager.RyuApp):
+    _EVENTS = [event.EventRowUpdate,
+               event.EventRowDelete,
+               event.EventRowInsert]
+
     @classmethod
     def factory(cls, sock, address, *args, **kwargs):
         ovs_stream = stream.Stream(sock, None, None)
