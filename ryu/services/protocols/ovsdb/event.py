@@ -81,4 +81,10 @@ class EventModifyReply(event.EventReplyBase):
 #                add((table, row_uuid, row))
 
 
+class EventNewOVSDBConnection(event.EventBase):
+    def __init__(self, system_id):
+        super(event.EventBase, self).__init__()
+        self.system_id = system_id
+
+
 handler.register_service('ryu.services.protocols.ovsdb.manager')

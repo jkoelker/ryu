@@ -30,6 +30,8 @@ cfg.CONF.register_opts(opts, 'ovsdb')
 
 
 class OVSDB(app_manager.RyuApp):
+    _EVENTS = [event.EventNewOVSDBConnection]
+
     def __init__(self, *args, **kwargs):
         super(OVSDB, self).__init__(*args, **kwargs)
         self._address = self.CONF.ovsdb.address
@@ -61,6 +63,8 @@ class OVSDB(app_manager.RyuApp):
         if app:
             self._clients[app.name] = app
             app.start()
+            ev = event.EventNewOVSDBConnection(app.system_id)
+            self.send_event_to_observers(ev)
 
     def start(self):
         self._server = hub.listen((self._address, self._port))
