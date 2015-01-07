@@ -86,5 +86,21 @@ class EventNewOVSDBConnection(event.EventBase):
         super(event.EventBase, self).__init__()
         self.system_id = system_id
 
+    def __str__(self):
+        return '%s<system_id=%s>' % (self.__class__.__name__,
+                                     self.system_id)
+
+
+class EventReadRequest(event.EventRequestBase):
+    def __init__(self, system_id, table_name):
+        self.system_id = system_id
+        self.table_name = table_name
+        self.dst = 'OVSDB'
+
+
+class EventReadReply(event.EventReplyBase):
+    def __init__(self, system_id, table):
+        self.system_id = system_id
+        self.table = table
 
 handler.register_service('ryu.services.protocols.ovsdb.manager')
