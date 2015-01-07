@@ -30,7 +30,9 @@ cfg.CONF.register_opts(opts, 'ovsdb')
 
 
 class OVSDB(app_manager.RyuApp):
-    _EVENTS = [event.EventNewOVSDBConnection]
+    _EVENTS = [event.EventNewOVSDBConnection,
+               event.EventModifyRequest,
+               event.EventReadRequest]
 
     def __init__(self, *args, **kwargs):
         super(OVSDB, self).__init__(*args, **kwargs)
@@ -94,3 +96,15 @@ class OVSDB(app_manager.RyuApp):
             return
 
         return remote.modify_request_handler(ev)
+
+    @handler.set_ev_cls(event.EventReadRequest)
+    def read_request_handler(self, ev):
+        system_id = ev.system_id
+        client_name = client.RemoteOvsdb.instance_name(system_id)
+        remote = self._clients.get(client_name)
+
+        if not remote:
+            self.logger.info('Unknown remote system_id %s' % system_id)
+            return
+
+        return remote.read_request_handler(ev)

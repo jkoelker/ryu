@@ -306,6 +306,15 @@ class RemoteOvsdb(app_manager.RyuApp):
         txn._uuidize()
         self._txn_q.append((txn, ev))
 
+    def read_request_handler(self, ev):
+        table = {}
+        if ev.table_name in self._idl.tables:
+            rows = self._idl.tables[ev.table_name].rows
+            table = dict((row_uuid, dictify(row))
+                         for row_uuid, row in rows.iteritems())
+        rep = event.EventReadReply(self.system_id, table)
+        self.reply_to_request(ev, rep)
+
     def start(self):
         super(RemoteOvsdb, self).start()
         t = hub.spawn(self._run_thread, self._idl_loop)
