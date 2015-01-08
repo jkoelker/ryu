@@ -58,8 +58,11 @@ def build_transaction(idl_obj, txn_req):
     txn = idl.Transaction(idl_obj)
 
     for table in txn_req:
+        if table is '_uuid':
+            continue
+
         for row in txn_req[table]:
-            row_obj = idl_obj.rows.get(row.uuid)
+            row_obj = idl_obj.tables[table].rows.get(row.uuid)
 
             if row.delete:
                 if row_obj:
@@ -71,7 +74,8 @@ def build_transaction(idl_obj, txn_req):
                 row_obj = txn.insert(table, row.uuid)
 
             for column, value in row.iteritems():
-                setattr(row_obj, column, value)
+                if column is not '_uuid':
+                    setattr(row_obj, column, value)
 
     return txn
 
@@ -291,6 +295,9 @@ class RemoteOvsdb(app_manager.RyuApp):
 
         if status in (idl.Transaction.SUCCESS, idl.Transaction.UNCHANGED):
             for rows in txn_req.itervalues():
+                if not isinstance(rows, collections.Iterable):
+                    continue
+
                 for row in rows:
                     row.ovs_uuid = txn.get_insert_uuid(row.uuid)
 
