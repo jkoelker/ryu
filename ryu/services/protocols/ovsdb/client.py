@@ -168,13 +168,14 @@ class Idl(idl.Idl):
 
     def __process_update(self, table, uuid, old, new):
         old_row = table.rows.get(uuid)
+        if old_row is not None:
+            old_row = model.Row(dictify(old_row))
+            old_row['_uuid'] = uuid
 
         changed = idl.Idl.__process_update(self, table, uuid, old, new)
 
         if changed:
             if not new:
-                old_row = model.Row(dictify(old_row))
-                old_row['_uuid'] = uuid
                 ev = (event.EventRowDelete, (table, old_row))
 
             elif not old:
@@ -183,9 +184,6 @@ class Idl(idl.Idl):
                 ev = (event.EventRowInsert, (table, new_row))
 
             else:
-                old_row = model.Row(dictify(old_row))
-                old_row['_uuid'] = uuid
-
                 new_row = model.Row(dictify(table.rows.get(uuid)))
                 new_row['_uuid'] = uuid
 
