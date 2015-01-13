@@ -46,11 +46,23 @@ from ryu.services.protocols.ovsdb import model
 now = timeval.msec
 
 
+def _uuid_to_row(atom, base):
+    if base.ref_table:
+        value = base.ref_table.rows.get(atom)
+    else:
+        value = atom
+
+    if isinstance(value, idl.Row):
+        value = str(value.uuid)
+
+    return value
+
+
 def dictify(row):
     if row is None:
-        return {}
+        return
 
-    return dict([(k, v.to_python(idl._uuid_to_row))
+    return dict([(k, v.to_python(_uuid_to_row))
                  for k, v in row._data.iteritems()])
 
 
