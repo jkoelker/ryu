@@ -188,18 +188,18 @@ class Idl(idl.Idl):
 
         if changed:
             if not new:
-                ev = (event.EventRowDelete, (table, old_row))
+                ev = (event.EventRowDelete, (table.name, old_row))
 
             elif not old:
                 new_row = model.Row(dictify(table.rows.get(uuid)))
                 new_row['_uuid'] = uuid
-                ev = (event.EventRowInsert, (table, new_row))
+                ev = (event.EventRowInsert, (table.name, new_row))
 
             else:
                 new_row = model.Row(dictify(table.rows.get(uuid)))
                 new_row['_uuid'] = uuid
 
-                ev = (event.EventRowUpdate, (table, old_row, new_row))
+                ev = (event.EventRowUpdate, (table.name, old_row, new_row))
 
             self._events.append(ev)
 
