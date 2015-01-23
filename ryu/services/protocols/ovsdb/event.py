@@ -55,30 +55,52 @@ class EventRowUpdate(event.EventBase):
 
 
 class EventModifyRequest(event.EventRequestBase):
-    def __init__(self, system_id, txn):
+    """ Dispatch a modify function to OVSDB
+
+    `func` must be a callable that accepts an insert fucntion and the
+    IDL.tables object. It can then modify the tables as needed. For inserts,
+    specify a UUID for each insert, and return a tuple of the temporary
+    UUID's. The execution of `func` will be wrapped in a single transaction
+    and the reply will include a dict of temporary UUID to real UUID mappings.
+
+    e.g.
+
+        new_port_uuid = uuid.uuid4()
+
+        def modify(tables, insert):
+            bridges = tables['Bridge'].rows
+            bridge = None
+            for b in bridges:
+                if b.name == 'my-bridge':
+                    bridge = b
+
+            if not bridge:
+                return
+
+            port = insert('Port', new_port_uuid)
+
+            bridge.ports = bridge.ports + [port]
+
+            return (new_port_uuid, )
+
+        request = EventModifyRequest(system_id, modify)
+        reply = send_request(request)
+
+        port_uuid = reply.insert_uuids[new_port_uuid]
+    """
+    def __init__(self, system_id, func):
         super(event.EventRequestBase, self).__init__()
         self.dst = 'OVSDB'
         self.system_id = system_id
-        self.txn = txn
+        self.func = func
 
 
 class EventModifyReply(event.EventReplyBase):
-    def __init__(self, system_id, txn, status):
+    def __init__(self, system_id, status, insert_uuids, err_msg):
         self.system_id = system_id
-        self.txn = txn
         self.status = status
-
-#        self.rows = []
-#        add = self.rows.append
-#
-#        for table in txn:
-#            for row in txn[table]:
-#                row_uuid = row.pop('_uuid', None)
-#
-#                if not row_uuid:
-#                    row_uuid = uuid.uuid4()
-#
-#                add((table, row_uuid, row))
+        self.insert_uuids = insert_uuids
+        self.err_msg = err_msg
 
 
 class EventNewOVSDBConnection(event.EventBase):
@@ -102,5 +124,18 @@ class EventReadReply(event.EventReplyBase):
     def __init__(self, system_id, table):
         self.system_id = system_id
         self.table = table
+
+
+class EventReadFuncRequest(event.EventRequestBase):
+    def __init__(self, system_id, func):
+        self.system_id = system_id
+        self.func = func
+        self.dst = 'OVSDB'
+
+
+class EventReadFuncReply(event.EventReplyBase):
+    def __init__(self, system_id, result):
+        self.system_id = system_id
+        self.result = result
 
 handler.register_service('ryu.services.protocols.ovsdb.manager')

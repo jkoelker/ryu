@@ -15,6 +15,7 @@
 
 import collections
 import logging
+import uuid
 
 # NOTE(jkoelker) Patch Vlog so that is uses standard logging
 from ovs import vlog
@@ -64,32 +65,6 @@ def dictify(row):
 
     return dict([(k, v.to_python(_uuid_to_row))
                  for k, v in row._data.iteritems()])
-
-
-def build_transaction(idl_obj, txn_req):
-    txn = idl.Transaction(idl_obj)
-
-    for table in txn_req:
-        if table is '_uuid':
-            continue
-
-        for row in txn_req[table]:
-            row_obj = idl_obj.tables[table].rows.get(row.uuid)
-
-            if row.delete:
-                if row_obj:
-                    row_obj.delete()
-
-                continue
-
-            if not row_obj:
-                row_obj = txn.insert(table, row.uuid)
-
-            for column, value in row.iteritems():
-                if column is not '_uuid':
-                    setattr(row_obj, column, value)
-
-    return txn
 
 
 def discover_schemas(connection):
@@ -299,37 +274,51 @@ class RemoteOvsdb(app_manager.RyuApp):
         self._transaction()
 
     def _transaction(self):
-        txn_req, req = self._txn_q.popleft()
-        txn = build_transaction(self._idl, txn_req)
+        req = self._txn_q.popleft()
+        txn = idl.Transaction(self._idl)
+
+        uuids = req.func(self._idl.tables, txn.insert)
         status = txn.commit_block()
 
-        if status in (idl.Transaction.SUCCESS, idl.Transaction.UNCHANGED):
-            for rows in txn_req.itervalues():
-                if not isinstance(rows, collections.Iterable):
-                    continue
+        insert_uuids = {}
+        err_msg = None
 
-                for row in rows:
-                    row.ovs_uuid = txn.get_insert_uuid(row.uuid)
+        if status in (idl.Transaction.SUCCESS,
+                      idl.Transaction.UNCHANGED):
+            if uuids:
+                if isinstance(uuids, uuid.UUID):
+                    insert_uuids[uuids] = txn.get_insert_uuid(uuids)
 
-        rep = event.EventModifyReply(self.system_id, txn, status)
+                else:
+                    insert_uuids = dict((uuid, txn.get_insert_uuid(uuid))
+                                        for uuid in uuids)
+        else:
+            err_msg = txn.get_error()
+
+        rep = event.EventModifyReply(self.system_id, status, insert_uuids,
+                                     err_msg)
         self.reply_to_request(req, rep)
 
     def modify_request_handler(self, ev):
-        txn = ev.txn
-
-        if not isinstance(txn, model.Transaction):
-            txn = model.Transaction(txn)
-
-        txn._uuidize()
-        self._txn_q.append((txn, ev))
+        self._txn_q.append(ev)
 
     def read_request_handler(self, ev):
-        table = {}
+        table = model.Table(ev.table_name)
+
         if ev.table_name in self._idl.tables:
             rows = self._idl.tables[ev.table_name].rows
-            table = dict((row_uuid, dictify(row))
-                         for row_uuid, row in rows.iteritems())
+
+            for row_uuid, row in rows.iteritems():
+                new_row = model.Row(dictify(row))
+                new_row['_uuid'] = row_uuid
+                table.add_row(new_row)
+
         rep = event.EventReadReply(self.system_id, table)
+        self.reply_to_request(ev, rep)
+
+    def read_request_func_handler(self, ev):
+        result = ev.func(self._idl.tables)
+        rep = event.EventReadFuncReply(self.system_id, result)
         self.reply_to_request(ev, rep)
 
     def start(self):
