@@ -30,14 +30,6 @@ class _UUIDDict(dict):
     def uuid(self, value):
         self['_uuid'] = value
 
-    @property
-    def ovs_uuid(self):
-        return self.get('_ovs_uuid')
-
-    @ovs_uuid.setter
-    def ovs_uuid(self, value):
-        self['_ovs_uuid'] = value
-
 
 class Row(_UUIDDict):
     @property
@@ -66,7 +58,3 @@ class Table(dict):
 
         row._uuidize()
         self[row.uuid] = row
-
-
-class Transaction(_UUIDDict):
-    pass

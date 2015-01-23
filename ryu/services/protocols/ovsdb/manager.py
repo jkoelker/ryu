@@ -108,3 +108,15 @@ class OVSDB(app_manager.RyuApp):
             return
 
         return remote.read_request_handler(ev)
+
+    @handler.set_ev_cls(event.EventReadFuncRequest)
+    def read_request_func_handler(self, ev):
+        system_id = ev.system_id
+        client_name = client.RemoteOvsdb.instance_name(system_id)
+        remote = self._clients.get(client_name)
+
+        if not remote:
+            self.logger.info('Unknown remote system_id %s' % system_id)
+            return
+
+        return remote.read_request_func_handler(ev)
