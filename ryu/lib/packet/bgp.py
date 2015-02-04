@@ -1289,7 +1289,15 @@ class _MPLSLabels(object):
 
         while len(buf) >= 3:
             (label,) = cls._PACK_FMT.unpack_from('\x00' + buf[:3])
+
+            bottom = bool(label & 1)
+            label = label >> 4
+
             add(label)
+
+            if bottom or label == 0:
+                break
+
             buf = buf[3:]
 
         return cls(*labels)
