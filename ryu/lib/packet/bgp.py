@@ -2269,6 +2269,10 @@ class _ExtendedCommunity(StringifyMixin, _TypeDisp, _Value):
     FOUR_OCTET_AS_SPECIFIC = 0x02
     OPAQUE = 0x03
 
+    ESI_LABEL = 0x06
+    ES_IMPORT_ROUTE_TARGET = 0x06
+    MAC_MOBILITY = 0x06
+
     def __init__(self, type_):
         self.type = type_
 
@@ -2361,6 +2365,73 @@ class BGPUnknownExtendedCommunity(_ExtendedCommunity):
 
     def __init__(self, **kwargs):
         self.do_init(BGPUnknownExtendedCommunity, self, kwargs)
+
+
+@_ExtendedCommunity.register_type(_ExtendedCommunity.ESI_LABEL)
+class BGPESILabelExtendedCommunity(_ExtendedCommunity):
+    """
+    https://tools.ietf.org/html/draft-ietf-l2vpn-evpn-11#section-7.5
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | Type=0x06     | Sub-Type=0x01 | Flags(1 Octet)|  Reserved=0   |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | Reserved = 0  |          ESI Label                            |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    """
+    _VALUE_PACK_STR = '!BBH3s'
+    _VALUE_FIELDS = ['subtype', 'flags', 'reserved', 'esi_label']
+
+    def __init__(self, type_=_ExtendedCommunity.ESI_LABEL, **kwargs):
+        kwargs['subtype'] = 0x01
+        self.do_init(BGPESILabelExtendedCommunity, self, kwargs,
+                     type_=type_)
+
+
+@_ExtendedCommunity.register_type(_ExtendedCommunity.ES_IMPORT_ROUTE_TARGET)
+class BGPESImportRouteTargetExtendedCommunity(_ExtendedCommunity):
+    """
+    https://tools.ietf.org/html/draft-ietf-l2vpn-evpn-11#section-7.6
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | Type=0x06     | Sub-Type=0x02 |          ES-Import            |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                     ES-Import Cont'd                          |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    """
+    _VALUE_PACK_STR = '!B6s'
+    _VALUE_FIELDS = ['subtype', 'es_import']
+
+    def __init__(self, type_=_ExtendedCommunity.ES_IMPORT_ROUTE_TARGET,
+                 **kwargs):
+        kwargs['subtype'] = 0x02
+        self.do_init(BGPESImportRouteTargetExtendedCommunity, self, kwargs,
+                     type_=type_)
+
+
+@_ExtendedCommunity.register_type(_ExtendedCommunity.MAC_MOBILITY)
+class BGPMACMobilityExtendedCommunity(_ExtendedCommunity):
+    """
+    https://tools.ietf.org/html/draft-ietf-l2vpn-evpn-11#section-7.7
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    | Type=0x06     | Sub-Type=0x00 |Flags(1 octet)|  Reserved=0    |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                       Sequence Number                         |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    """
+    _VALUE_PACK_STR = '!BBBI'
+    _VALUE_FIELDS = ['subtype', 'flags', 'reserved', 'sequence_number']
+
+    def __init__(self, type_=_ExtendedCommunity.MAC_MOBILITY,
+                 **kwargs):
+        kwargs['subtype'] = 0x00
+        self.do_init(BGPMACMobilityExtendedCommunity, self, kwargs,
+                     type_=type_)
 
 
 @_PathAttribute.register_type(BGP_ATTR_TYPE_MP_REACH_NLRI)
