@@ -13,16 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ryu.controller import event
+from ryu.controller import event as ryu_event
 from ryu.controller import handler
 
 
-class EventRowBase(event.EventBase):
-    def __init__(self, system_id, table, row):
-        super(event.EventBase, self).__init__()
+class EventRowBase(ryu_event.EventBase):
+    def __init__(self, system_id, table, row, event_type):
+        super(EventRowBase, self).__init__()
         self.system_id = system_id
         self.table = table
         self.row = row
+        self.event_type = event_type
 
     def __str__(self):
         return '%s<system_id=%s table=%s, uuid=%s>' % (self.__class__.__name__,
@@ -32,20 +33,23 @@ class EventRowBase(event.EventBase):
 
 
 class EventRowDelete(EventRowBase):
-    pass
+    def __init__(self, system_id, table, row):
+        super(EventRowDelete, self).__init__(system_id, table, row, 'Deleted')
 
 
 class EventRowInsert(EventRowBase):
-    pass
+    def __init__(self, system_id, table, row):
+        super(EventRowInsert, self).__init__(system_id, table, row, 'Inserted')
 
 
-class EventRowUpdate(event.EventBase):
+class EventRowUpdate(ryu_event.EventBase):
     def __init__(self, system_id, table, old, new):
-        super(event.EventBase, self).__init__()
+        super(EventRowUpdate, self).__init__()
         self.system_id = system_id
         self.table = table
         self.old = old
         self.new = new
+        self.event_type = 'Updated'
 
     def __str__(self):
         return '%s<system_id=%s table=%s, uuid=%s>' % (self.__class__.__name__,
@@ -54,7 +58,7 @@ class EventRowUpdate(event.EventBase):
                                                        self.old['_uuid'])
 
 
-class EventModifyRequest(event.EventRequestBase):
+class EventModifyRequest(ryu_event.EventRequestBase):
     """ Dispatch a modify function to OVSDB
 
     `func` must be a callable that accepts an insert fucntion and the
@@ -89,13 +93,13 @@ class EventModifyRequest(event.EventRequestBase):
         port_uuid = reply.insert_uuids[new_port_uuid]
     """
     def __init__(self, system_id, func):
-        super(event.EventRequestBase, self).__init__()
+        super(EventModifyRequest, self).__init__()
         self.dst = 'OVSDB'
         self.system_id = system_id
         self.func = func
 
 
-class EventModifyReply(event.EventReplyBase):
+class EventModifyReply(ryu_event.EventReplyBase):
     def __init__(self, system_id, status, insert_uuids, err_msg):
         self.system_id = system_id
         self.status = status
@@ -103,9 +107,9 @@ class EventModifyReply(event.EventReplyBase):
         self.err_msg = err_msg
 
 
-class EventNewOVSDBConnection(event.EventBase):
+class EventNewOVSDBConnection(ryu_event.EventBase):
     def __init__(self, system_id):
-        super(event.EventBase, self).__init__()
+        super(EventNewOVSDBConnection, self).__init__()
         self.system_id = system_id
 
     def __str__(self):
@@ -113,29 +117,76 @@ class EventNewOVSDBConnection(event.EventBase):
                                      self.system_id)
 
 
-class EventReadRequest(event.EventRequestBase):
+class EventReadRequest(ryu_event.EventRequestBase):
     def __init__(self, system_id, table_name):
         self.system_id = system_id
         self.table_name = table_name
         self.dst = 'OVSDB'
 
 
-class EventReadReply(event.EventReplyBase):
+class EventReadReply(ryu_event.EventReplyBase):
     def __init__(self, system_id, table):
         self.system_id = system_id
         self.table = table
 
 
-class EventReadFuncRequest(event.EventRequestBase):
+class EventReadFuncRequest(ryu_event.EventRequestBase):
     def __init__(self, system_id, func):
         self.system_id = system_id
         self.func = func
         self.dst = 'OVSDB'
 
 
-class EventReadFuncReply(event.EventReplyBase):
+class EventReadFuncReply(ryu_event.EventReplyBase):
     def __init__(self, system_id, result):
         self.system_id = system_id
         self.result = result
+
+
+class EventRowInsertedBase(EventRowInsert):
+    def __init__(self, ev):
+        super(EventRowInsertedBase, self).__init__(ev.system_id,
+                                                   ev.table,
+                                                   ev.row)
+
+
+class EventRowDeletedBase(EventRowDelete):
+    def __init__(self, ev):
+        super(EventRowDeletedBase, self).__init__(ev.system_id,
+                                                  ev.table,
+                                                  ev.row)
+
+
+class EventRowUpdatedBase(EventRowUpdate):
+    def __init__(self, ev):
+        super(EventRowUpdatedBase, self).__init__(ev.system_id,
+                                                  ev.table,
+                                                  ev.old,
+                                                  ev.new)
+
+
+class EventPortInserted(EventRowInsertedBase):
+    pass
+
+
+class EventPortDeleted(EventRowDeletedBase):
+    pass
+
+
+class EventPortUpdated(EventRowUpdatedBase):
+    pass
+
+
+class EventInterfaceInserted(EventRowInsertedBase):
+    pass
+
+
+class EventInterfaceDeleted(EventRowDeletedBase):
+    pass
+
+
+class EventInterfaceUpdated(EventRowUpdatedBase):
+    pass
+
 
 handler.register_service('ryu.services.protocols.ovsdb.manager')
