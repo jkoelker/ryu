@@ -184,7 +184,13 @@ class Idl(idl.Idl):
 class RemoteOvsdb(app_manager.RyuApp):
     _EVENTS = [event.EventRowUpdate,
                event.EventRowDelete,
-               event.EventRowInsert]
+               event.EventRowInsert,
+               event.EventInterfaceDeleted,
+               event.EventInterfaceInserted,
+               event.EventInterfaceUpdated,
+               event.EventPortDeleted,
+               event.EventPortInserted,
+               event.EventPortUpdated]
 
     @classmethod
     def factory(cls, sock, address, *args, **kwargs):
@@ -243,9 +249,20 @@ class RemoteOvsdb(app_manager.RyuApp):
             for event in events:
                 ev = event[0]
                 args = event[1]
-                self.send_event_to_observers(ev(self.system_id, *args))
+                self._submit_event(ev(self.system_id, *args))
 
             hub.sleep(0)
+
+    def _submit_event(self, ev):
+        self.send_event_to_observers(ev)
+        try:
+            ev_cls_name = 'Event' + ev.table + ev.event_type
+            proxy_ev_cls = getattr(event, ev_cls_name, None)
+            if proxy_ev_cls:
+                self.send_event_to_observers(proxy_ev_cls(ev))
+        except Exception:
+            self.logger.exception('Error submitting specific event for OVSDB',
+                                  self.system_id)
 
     def _idl_loop(self):
         while self.is_active:
