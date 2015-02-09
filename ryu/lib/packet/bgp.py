@@ -1134,12 +1134,12 @@ class EVPNNLRI(StringifyMixin, _TypeDisp):
     @classmethod
     def parser(cls, buf):
         route_type, length = cls._PACK_FMT.unpack_from(buffer(buf))
-        route_specific_payload = buf[cls._PACK_FMT.size:length]
-        rest = buf[length:]
+        end = cls._PACK_FMT.size + length
+        route_specific_payload = buf[cls._PACK_FMT.size:end]
+        rest = buf[end:]
         route_type_cls = cls._lookup_type(route_type)
-        print route_type
-        print '-----'
-        return route_type_cls.parser(route_specific_payload), rest
+        inst = cls(route_type, route_type_cls.parser(route_specific_payload))
+        return inst, rest
 
     def seialize(self):
         route_buf = self.route.serialize()
@@ -1332,7 +1332,7 @@ class EVPNEthernetAutoDiscover(object):
 
         rd = _RouteDistinguisher.parser(rd_buf)
         esi = _EthernetSegmentId.parser(esi_buf)
-        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+        (etag, ) = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
         label = _MPLSLabels.parser(mpls_buf)
 
         return cls(rd, esi, etag, label)
@@ -1392,10 +1392,9 @@ class EVPNMAC_IP(object):
 
         rd = _RouteDistinguisher.parser(rd_buf)
         esi = _EthernetSegmentId.parser(esi_buf)
-        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+        (etag, ) = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
         mac = addrconv.mac.bin_to_text(mac_buf)
         label = _MPLSLabels.parser(buf)
-        print label.labels
         return cls(rd, esi, etag, mac, label, ip=ip)
 
     def serialize(self):
@@ -1437,7 +1436,7 @@ class EVPNInclusiveMulticastEthernetTag(object):
         ip_buf = buf[13:]
 
         rd = _RouteDistinguisher.parser(rd_buf)
-        etag = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
+        (etag, ) = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
 
         if ip_len == 32:
             ip = addrconv.ipv4.bin_to_text(ip_buf)
@@ -2460,6 +2459,11 @@ class BGPPathAttributeMpReachNLRI(_PathAttribute):
             self._next_hop_bin = addrconv.ipv4.text_to_bin(next_hop)
         elif afi == addr_family.IP6:
             self._next_hop_bin = addrconv.ipv6.text_to_bin(next_hop)
+        elif afi == addr_family.L2VPN:
+            if next_hop_len == 4:
+                self._next_hop_bin = addrconv.ipv4.text_to_bin(next_hop)
+            else:
+                self._next_hop_bin = addrconv.ipv6.text_to_bin(next_hop)
         else:
             raise ValueError('Invalid address familly(%d)' % afi)
         self._reserved = reserved
@@ -2491,6 +2495,11 @@ class BGPPathAttributeMpReachNLRI(_PathAttribute):
         elif rf == RF_IPv4_VPN:
             next_hop = addrconv.ipv4.bin_to_text(next_hop_bin[cls._rd_length:])
             next_hop_len -= cls._rd_length
+        elif rf == RF_EVPN:
+            if next_hop_len == 4:
+                next_hop = addrconv.ipv4.bin_to_text(next_hop_bin)
+            else:
+                next_hop = addrconv.ipv6.bin_to_text(next_hop_bin)
         elif afi == addr_family.IP:
             next_hop = addrconv.ipv4.bin_to_text(next_hop_bin)
         elif afi == addr_family.IP6:
