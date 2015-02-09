@@ -1148,7 +1148,7 @@ class EVPNNLRI(StringifyMixin, _TypeDisp):
         return nlri + route_buf
 
 
-class _EthernetSegmentId(_TypeDisp):
+class _EthernetSegmentId(StringifyMixin, _TypeDisp):
     _TYPE_FMT = struct.Struct('!B')
 
     ARBITRARY = 0
@@ -1171,7 +1171,7 @@ class _EthernetSegmentId(_TypeDisp):
 
 
 @_EthernetSegmentId.register_type(_EthernetSegmentId.ARBITRARY)
-class ESIArbitrary(object):
+class ESIArbitrary(StringifyMixin):
     _PACK_FMT = struct.Struct('!9B')
 
     def __init__(self, value):
@@ -1186,7 +1186,7 @@ class ESIArbitrary(object):
         return bytearray(self._PACK_FMT.pack(*self.value))
 
 
-class _ESIMacKey(object):
+class _ESIMacKey(StringifyMixin):
     _PACK_FMT = struct.Struct('!6sHB')
 
     def __init__(self, mac, key):
@@ -1227,7 +1227,7 @@ class ESIBridged(_ESIMacKey):
 
 
 @_EthernetSegmentId.register_type(_EthernetSegmentId.MAC)
-class ESIMac(object):
+class ESIMac(StringifyMixin):
     _PACK_FMT = struct.Struct('!6sI')
 
     def __init__(self, mac, ld):
@@ -1245,7 +1245,7 @@ class ESIMac(object):
         return bytearray(buf[:6] + buf[7:])
 
 
-class _ESIKeyLocalDiscriminator(object):
+class _ESIKeyLocalDiscriminator(StringifyMixin):
     _PACK_FMT = struct.Struct('!IIB')
 
     def __init__(self, key, ld):
@@ -1276,7 +1276,7 @@ class ESIAsNumber(_ESIKeyLocalDiscriminator):
         return self._key
 
 
-class _MPLSLabels(object):
+class _MPLSLabels(StringifyMixin):
     _PACK_FMT = struct.Struct('!I')
 
     def __init__(self, *labels):
@@ -1314,7 +1314,7 @@ class _MPLSLabels(object):
 
 
 @EVPNNLRI.register_type(EVPNNLRI.ETHERNET_AUTO_DISCOVER)
-class EVPNEthernetAutoDiscover(object):
+class EVPNEthernetAutoDiscover(StringifyMixin):
     _ETAG_PACK_FMT = struct.Struct('!I')
 
     def __init__(self, route_dist, esi, etag, label):
@@ -1346,7 +1346,7 @@ class EVPNEthernetAutoDiscover(object):
 
 
 @EVPNNLRI.register_type(EVPNNLRI.MAC_IP)
-class EVPNMAC_IP(object):
+class EVPNMAC_IP(StringifyMixin):
     _ETAG_PACK_FMT = struct.Struct('!I')
 
     def __init__(self, route_dist, esi, etag, mac, label, ip=None):
@@ -1420,7 +1420,7 @@ class EVPNMAC_IP(object):
 
 
 @EVPNNLRI.register_type(EVPNNLRI.INCLUSIVE_MULTICAST_ETHERNET_TAG)
-class EVPNInclusiveMulticastEthernetTag(object):
+class EVPNInclusiveMulticastEthernetTag(StringifyMixin):
     _ETAG_PACK_FMT = struct.Struct('!I')
 
     def __init__(self, route_dist, etag, ip):
@@ -1459,7 +1459,7 @@ class EVPNInclusiveMulticastEthernetTag(object):
 
 
 @EVPNNLRI.register_type(EVPNNLRI.ETHERNET_SEGMENT)
-class EVPNEthernetSegment(object):
+class EVPNEthernetSegment(StringifyMixin):
     def __init__(self, route_dist, esi, ip):
         self.route_dist = route_dist
         self.esi = esi
