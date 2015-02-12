@@ -800,11 +800,15 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
         """
         route_family = path.route_family
 
-        # By default we use BGPS's interface IP with this peer as next_hop.
-        if self._neigh_conf.next_hop:
+        # By default we use path's nexthop if has been set, else we check the
+        # BGPS's interface IP with this peer as next_hop.
+        if path.has_nexthop():
+            next_hop = path.nexthop
+        elif self._neigh_conf.next_hop:
             next_hop = self._neigh_conf.next_hop
         else:
             next_hop = self.host_bind_ip
+
         if route_family == RF_IPv6_VPN:
             next_hop = self._ipv4_mapped_ipv6(next_hop)
 
