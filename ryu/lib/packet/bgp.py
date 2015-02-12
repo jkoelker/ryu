@@ -1148,7 +1148,7 @@ class EVPNNLRI(StringifyMixin, _TypeDisp):
         return nlri + route_buf
 
 
-class _EthernetSegmentId(StringifyMixin, _TypeDisp):
+class EthernetSegmentId(StringifyMixin, _TypeDisp):
     _TYPE_FMT = struct.Struct('!B')
 
     ARBITRARY = 0
@@ -1170,7 +1170,7 @@ class _EthernetSegmentId(StringifyMixin, _TypeDisp):
         return cls(esi_type, esi_type_cls.parser(value))
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.ARBITRARY)
+@EthernetSegmentId.register_type(EthernetSegmentId.ARBITRARY)
 class ESIArbitrary(StringifyMixin):
     _PACK_FMT = struct.Struct('!9B')
 
@@ -1204,7 +1204,7 @@ class _ESIMacKey(StringifyMixin):
         return buf
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.LACP)
+@EthernetSegmentId.register_type(EthernetSegmentId.LACP)
 class ESILacp(_ESIMacKey):
     @property
     def system_mac(self):
@@ -1215,7 +1215,7 @@ class ESILacp(_ESIMacKey):
         return self._key
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.BRIDGED)
+@EthernetSegmentId.register_type(EthernetSegmentId.BRIDGED)
 class ESIBridged(_ESIMacKey):
     @property
     def root_bridge(self):
@@ -1226,7 +1226,7 @@ class ESIBridged(_ESIMacKey):
         return self._key
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.MAC)
+@EthernetSegmentId.register_type(EthernetSegmentId.MAC)
 class ESIMac(StringifyMixin):
     _PACK_FMT = struct.Struct('!6sI')
 
@@ -1262,14 +1262,14 @@ class _ESIKeyLocalDiscriminator(StringifyMixin):
         return buf
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.ROUTER_ID)
+@EthernetSegmentId.register_type(EthernetSegmentId.ROUTER_ID)
 class ESIRouter(_ESIKeyLocalDiscriminator):
     @property
     def router_id(self):
         return self._key
 
 
-@_EthernetSegmentId.register_type(_EthernetSegmentId.AS_NUMBER)
+@EthernetSegmentId.register_type(EthernetSegmentId.AS_NUMBER)
 class ESIAsNumber(_ESIKeyLocalDiscriminator):
     @property
     def as_number(self):
@@ -1331,7 +1331,7 @@ class EVPNEthernetAutoDiscover(StringifyMixin):
         mpls_buf = buf[22:]
 
         rd = _RouteDistinguisher.parser(rd_buf)
-        esi = _EthernetSegmentId.parser(esi_buf)
+        esi = EthernetSegmentId.parser(esi_buf)
         (etag, ) = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
         label = _MPLSLabels.parser(mpls_buf)
 
@@ -1391,7 +1391,7 @@ class EVPNMAC_IP(StringifyMixin):
             ip = None
 
         rd = _RouteDistinguisher.parser(rd_buf)
-        esi = _EthernetSegmentId.parser(esi_buf)
+        esi = EthernetSegmentId.parser(esi_buf)
         (etag, ) = cls._ETAG_PACK_FMT.unpack_from(etag_buf)
         mac = addrconv.mac.bin_to_text(mac_buf)
         label = _MPLSLabels.parser(buf)
@@ -1473,7 +1473,7 @@ class EVPNEthernetSegment(StringifyMixin):
         ip_buf = buf[19:]
 
         rd = _RouteDistinguisher.parser(rd_buf)
-        esi = _EthernetSegmentId.parser(esi_buf)
+        esi = EthernetSegmentId.parser(esi_buf)
 
         if ip_len == 32:
             ip = addrconv.ipv4.bin_to_text(ip_buf)
