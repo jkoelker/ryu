@@ -805,6 +805,10 @@ class Path(object):
 
         return not interested_rts.isdisjoint(curr_rts)
 
+    def has_nexthop(self):
+        return not (not self._nexthop or self._nexthop == '0.0.0.0' or
+                    self._nexthop == '::')
+
     def __str__(self):
         return (
             'Path(source: %s, nlri: %s, source ver#: %s, '
