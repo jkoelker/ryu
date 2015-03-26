@@ -17,10 +17,10 @@ from ryu.services.protocols.ovsdb import event as ovsdb_event
 
 
 def match_row(manager, system_id, table, fn):
-
     def _match_row(tables):
         return next((r for r in tables[table].rows.values()
                      if fn(r)), None)
+
     request_to_get_tables = ovsdb_event.EventReadFuncRequest(system_id,
                                                              _match_row)
     reply_to_get_tables = manager.send_request(request_to_get_tables)
@@ -28,39 +28,44 @@ def match_row(manager, system_id, table, fn):
 
 
 def match_rows(manager, system_id, table, fn):
+    def _match_rows(tables):
+        return (r for r in tables[table].rows.values() if fn(r))
 
-        def _match_rows(tables):
-            return (r for r in tables[table].rows.values() if fn(r))
-        request = ovsdb_event.EventReadFuncRequest(system_id, _match_rows)
-        reply = manager.send_request(request)
-        return reply.result
+    request = ovsdb_event.EventReadFuncRequest(system_id, _match_rows)
+    reply = manager.send_request(request)
+    return reply.result
 
 
 def row_by_name(manager, system_id, name, table='Bridge', fn=None):
     matched_row = match_row(manager, system_id, table,
                             lambda row: row.name == name)
+
     if fn is not None:
         return fn(matched_row)
-    return matched_row
 
-"""
-Example : To get datapath_id from Bridge table
-get_column_value('Bridge', <bridge name>, 'datapath_id').strip('"')
-"""
+    return matched_row
 
 
 def get_column_value(manager, table, record, column):
+    """
+    Example : To get datapath_id from Bridge table
+    get_column_value('Bridge', <bridge name>, 'datapath_id').strip('"')
+    """
     row = row_by_name(manager, record, table)
     value = getattr(row, column, "")
-    if type(value) == list and len(value) == 1:
+
+    if isinstance(value, list) and len(value) == 1:
         value = value[0]
+
     return str(value)
+
 
 def get_iface_by_name(manager, system_id, name, fn=None):
     iface = row_by_name(manager, system_id, name, 'Interface')
 
     if fn is not None:
         return fn(iface)
+
     return iface
 
 
@@ -70,14 +75,17 @@ def get_bridge_for_iface_name(manager, system_id, iface_name, fn=None):
                      lambda x: iface in x.interfaces)
     bridge = match_row(manager, system_id, 'Bridge',
                        lambda x: port in x.ports)
+
     if fn is not None:
         return fn(bridge)
+
     return bridge
 
 
 def get_table(manager, system_id, name):
     def _get_table(tables):
         return tables[name]
+
     request_to_get_tables = ovsdb_event.EventReadFuncRequest(system_id,
                                                              _get_table)
     reply_to_get_tables = manager.send_request(request_to_get_tables)
@@ -85,10 +93,12 @@ def get_table(manager, system_id, name):
 
 
 def get_bridge_by_datapath_id(manager, system_id, datapath_id, fn=None):
-    bridge = match_row(manager, system_id, 'Bridge',
-                            lambda row:
-                            dpidlib.str_to_dpid(str(row.datapath_id[0])) ==
-                            datapath_id)
+    def _match_fn(row):
+        row_dpid = dpidlib.str_to_dpid(str(row.datapath_id[0]))
+        return row_dpid == datapath_id
+
+    bridge = match_row(manager, system_id, 'Bridge', _match_fn)
+
     if fn is not None:
         return fn(bridge)
 
@@ -100,9 +110,8 @@ def get_bridges_by_system_id(manager, system_id):
 
 
 def bridge_exists(manager, system_id, bridge_name):
-        return bool(row_by_name(manager, system_id, bridge_name))
+    return bool(row_by_name(manager, system_id, bridge_name))
 
 
 def port_exists(manager, system_id, port_name):
     return bool(row_by_name(manager, system_id, port_name, 'Port'))
-
