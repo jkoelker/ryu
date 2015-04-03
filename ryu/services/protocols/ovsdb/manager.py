@@ -19,6 +19,8 @@ from ryu.lib import hub
 from ryu.services.protocols.ovsdb import client
 from ryu.services.protocols.ovsdb import event
 from ryu.controller import handler
+import auth
+import ssl
 
 
 opts = [cfg.StrOpt('address', default='0.0.0.0',
@@ -45,6 +47,28 @@ class OVSDB(app_manager.RyuApp):
             # TODO(jkoelker) SSL Certificate check
             # TODO(jkoelker) Whitelist addresses
             sock, client_address = server.accept()
+
+            keyfile = '/etc/openvswitch/sc-privkey.pem'
+            certfile = '/etc/openvswitch/sc-cert.pem'
+            ca_certs = '/var/lib/openvswitch/pki/controllerca/cacert.pem'
+            sslsock = ssl.wrap_socket(sock,
+                                      cert_reqs=ssl.CERT_REQUIRED,
+                                      keyfile=keyfile,
+                                      certfile=certfile,
+                                      ca_certs=ca_certs,
+                                      do_handshake_on_connect=False,
+                                      server_side=True)
+
+            ssl_required = True
+            auth.add_test_cert()
+
+            if ssl_required and not auth.is_authorized(sslsock):
+                msg = 'Unauthorized connection from %s:%s closing connection.'
+                self.logger.debug(msg % client_address)
+                sslsock.shutdown(2)
+                sslsock.close()
+                continue
+
             self.logger.debug('New connection from %s:%s' % client_address)
             t = hub.spawn(self._start_remote, sock, client_address)
             self.threads.append(t)
@@ -120,3 +144,9 @@ class OVSDB(app_manager.RyuApp):
             return
 
         return remote.read_request_func_handler(ev)
+
+    @handler.set_ev_cls(event.EventRegisterClientCertificateRequest)
+    def register_client_cert_request_handler(self, ev):
+        message = auth.add_authorized_client(ev.address, ev.cert)
+        rep = event.EventRegisterClientCertificateResponse(message)
+        self.reply_to_request(ev, rep)

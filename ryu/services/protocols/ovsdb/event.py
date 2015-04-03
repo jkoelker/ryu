@@ -189,4 +189,17 @@ class EventInterfaceUpdated(EventRowUpdatedBase):
     pass
 
 
+class EventRegisterClientCertificateRequest(ryu_event.EventRequestBase):
+    def __init__(self, address, cert):
+        super(EventRegisterClientCertificateRequest, self).__init__()
+        self.address = address
+        self.cert = cert
+
+
+class EventRegisterClientCertificateResponse(ryu_event.EventReplyBase):
+    def __init__(self, message):
+        super(EventRegisterClientCertificateResponse, self).__init__()
+        self.message = message
+
+
 handler.register_service('ryu.services.protocols.ovsdb.manager')
