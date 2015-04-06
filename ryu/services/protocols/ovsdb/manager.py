@@ -26,7 +26,16 @@ import ssl
 opts = [cfg.StrOpt('address', default='0.0.0.0',
                    help='OVSDB address'),
         cfg.IntOpt('port', default=6632,
-                   help='OVSDB port')]
+                   help='OVSDB port'),
+        cfg.StrOpt('mngr-privkey', default=None, help='manager private key'),
+        cfg.StrOpt('mngr-cert', default=None, help='manager certificate'),
+        cfg.StrOpt('mngr-ca-certs', default=None,
+                   help='manager CA Certificated'),
+        cfg.BoolOpt('ssl-required', default=False,
+                    help='require ssl connections'),
+        cfg.BoolOpt('ssl-fingerprint-verify', default=False,
+                    help='enable fingerprint only verification')
+        ]
 
 cfg.CONF.register_opts(opts, 'ovsdb')
 
@@ -42,33 +51,12 @@ class OVSDB(app_manager.RyuApp):
         self._port = self.CONF.ovsdb.port
         self._clients = {}
 
+        auth.add_test_cert()
+
     def _accept(self, server):
         while True:
-            # TODO(jkoelker) SSL Certificate check
             # TODO(jkoelker) Whitelist addresses
             sock, client_address = server.accept()
-
-            keyfile = '/etc/openvswitch/sc-privkey.pem'
-            certfile = '/etc/openvswitch/sc-cert.pem'
-            ca_certs = '/var/lib/openvswitch/pki/controllerca/cacert.pem'
-            sslsock = ssl.wrap_socket(sock,
-                                      cert_reqs=ssl.CERT_REQUIRED,
-                                      keyfile=keyfile,
-                                      certfile=certfile,
-                                      ca_certs=ca_certs,
-                                      do_handshake_on_connect=False,
-                                      server_side=True)
-
-            ssl_required = True
-            auth.add_test_cert()
-
-            if ssl_required and not auth.is_authorized(sslsock):
-                msg = 'Unauthorized connection from %s:%s closing connection.'
-                self.logger.debug(msg % client_address)
-                sslsock.shutdown(2)
-                sslsock.close()
-                continue
-
             self.logger.debug('New connection from %s:%s' % client_address)
             t = hub.spawn(self._start_remote, sock, client_address)
             self.threads.append(t)
@@ -93,7 +81,54 @@ class OVSDB(app_manager.RyuApp):
             self.send_event_to_observers(ev)
 
     def start(self):
-        self._server = hub.listen((self._address, self._port))
+        server = hub.listen((self._address, self._port))
+
+        if self.CONF.ovsdb.ssl_required:
+            key = self.CONF.ovsdb.mngr_privkey or self.CONF.ctl_privkey
+            crt = self.CONF.ovsdb.mngr_cert or self.CONF.ctl_cert
+
+            if not all((key, crt)):
+                raise RuntimeError('Key and Cert must be specified if SSL is '
+                                   'required')
+
+            if self.CONF.ssl_fingerprint_verify:
+                if hub.HUB_TYPE != 'eventlet':
+                    raise RuntimeError('Fingerprint Verification only '
+                                       'supported with the ryu hub')
+
+                from eventlet.green.OpenSSL import SSL
+                context = SSL.Context(SSL.SSLv23_METHOD)
+                context.use_certificate_file(crt)
+                context.use_privatekey_file(key)
+
+                def verify(conn, cert, errnum, depth, ok):
+                    digest = cert.digest('sha256')
+                    digest = digest.replace(':', '')
+                    digest = digest.replace(' ', '')
+                    digest = digest.upper()
+                    return auth.is_authorized(digest)
+
+                opts = (SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT |
+                        SSL.VERIFY_CLIENT_ONCE)
+
+                context.set_verify(opts, verify)
+
+                self._server = SSL.Connection(context, server)
+                self._server.set_accept_state()
+
+            else:
+                ca_certs = self.CONF.ovsdb.mngr_ca_certs or self.CONF.ca_certs
+
+                if not ca_certs:
+                    raise RuntimeError('CA certificates required for full '
+                                       'validation')
+
+                self._server = ssl.wrap_socket(server,
+                                               cert_reqs=ssl.CERT_REQUIRED,
+                                               keyfile=key,
+                                               certfile=crt,
+                                               server_side=True)
+
         self.logger.info('Listening on %s:%s for clients' % (self._address,
                                                              self._port))
         t = hub.spawn(self._accept, self._server)

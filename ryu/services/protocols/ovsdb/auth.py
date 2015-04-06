@@ -19,9 +19,8 @@ import hashlib
 _authorized_certificates = {}
 
 
-def is_authorized(sock):
-    cert = sock.getpeercert(binary_form=True)
-    if cert is not None:
+def is_authorized(digest):
+    return digest in _authorized_certificates
         digest = hashlib.sha256(cert).hexdigest()
         return digest in _authorized_certificates
 
