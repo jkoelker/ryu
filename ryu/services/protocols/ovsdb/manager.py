@@ -97,6 +97,13 @@ class OVSDB(app_manager.RyuApp):
                                        'supported with the ryu hub')
 
                 from eventlet.green.OpenSSL import SSL
+
+                class Connection(SSL.Connection):
+                    def accept(self):
+                        sock, client_address = SSL.Connection.accept(self)
+                        sock.do_handshake()
+                        return sock, client_address
+
                 context = SSL.Context(SSL.SSLv23_METHOD)
                 context.use_certificate_file(crt)
                 context.use_privatekey_file(key)
@@ -113,7 +120,7 @@ class OVSDB(app_manager.RyuApp):
 
                 context.set_verify(opts, verify)
 
-                self._server = SSL.Connection(context, server)
+                self._server = Connection(context, server)
                 self._server.set_accept_state()
 
             else:
