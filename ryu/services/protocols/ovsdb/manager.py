@@ -128,6 +128,8 @@ class OVSDB(app_manager.RyuApp):
                                                keyfile=key,
                                                certfile=crt,
                                                server_side=True)
+        else:
+            self._server = server
 
         self.logger.info('Listening on %s:%s for clients' % (self._address,
                                                              self._port))
