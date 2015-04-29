@@ -118,29 +118,17 @@ class EventNewOVSDBConnection(ryu_event.EventBase):
 
 
 class EventReadRequest(ryu_event.EventRequestBase):
-    def __init__(self, system_id, table_name):
-        self.system_id = system_id
-        self.table_name = table_name
-        self.dst = 'OVSDB'
-
-
-class EventReadReply(ryu_event.EventReplyBase):
-    def __init__(self, system_id, table):
-        self.system_id = system_id
-        self.table = table
-
-
-class EventReadFuncRequest(ryu_event.EventRequestBase):
     def __init__(self, system_id, func):
         self.system_id = system_id
         self.func = func
         self.dst = 'OVSDB'
 
 
-class EventReadFuncReply(ryu_event.EventReplyBase):
-    def __init__(self, system_id, result):
+class EventReadReply(ryu_event.EventReplyBase):
+    def __init__(self, system_id, result, err_msg=''):
         self.system_id = system_id
         self.result = result
+        self.err_msg = err_msg
 
 
 class EventRowInsertedBase(EventRowInsert):

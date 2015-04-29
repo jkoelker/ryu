@@ -21,8 +21,8 @@ def match_row(manager, system_id, table, fn):
         return next((r for r in tables[table].rows.values()
                      if fn(r)), None)
 
-    request_to_get_tables = ovsdb_event.EventReadFuncRequest(system_id,
-                                                             _match_row)
+    request_to_get_tables = ovsdb_event.EventReadRequest(system_id,
+                                                         _match_row)
     reply_to_get_tables = manager.send_request(request_to_get_tables)
     return reply_to_get_tables.result
 
@@ -31,7 +31,7 @@ def match_rows(manager, system_id, table, fn):
     def _match_rows(tables):
         return (r for r in tables[table].rows.values() if fn(r))
 
-    request = ovsdb_event.EventReadFuncRequest(system_id, _match_rows)
+    request = ovsdb_event.EventReadRequest(system_id, _match_rows)
     reply = manager.send_request(request)
     return reply.result
 
@@ -86,8 +86,8 @@ def get_table(manager, system_id, name):
     def _get_table(tables):
         return tables[name]
 
-    request_to_get_tables = ovsdb_event.EventReadFuncRequest(system_id,
-                                                             _get_table)
+    request_to_get_tables = ovsdb_event.EventReadRequest(system_id,
+                                                         _get_table)
     reply_to_get_tables = manager.send_request(request_to_get_tables)
     return reply_to_get_tables.result
 

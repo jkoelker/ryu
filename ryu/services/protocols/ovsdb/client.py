@@ -320,22 +320,8 @@ class RemoteOvsdb(app_manager.RyuApp):
         self._txn_q.append(ev)
 
     def read_request_handler(self, ev):
-        table = model.Table(ev.table_name)
-
-        if ev.table_name in self._idl.tables:
-            rows = self._idl.tables[ev.table_name].rows
-
-            for row_uuid, row in rows.iteritems():
-                new_row = model.Row(dictify(row))
-                new_row['_uuid'] = row_uuid
-                table.add_row(new_row)
-
-        rep = event.EventReadReply(self.system_id, table)
-        self.reply_to_request(ev, rep)
-
-    def read_request_func_handler(self, ev):
         result = ev.func(self._idl.tables)
-        rep = event.EventReadFuncReply(self.system_id, result)
+        rep = event.EventReadReply(self.system_id, result)
         self.reply_to_request(ev, rep)
 
     def start(self):
