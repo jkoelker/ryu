@@ -115,7 +115,7 @@ def get_datapath_ids_for_systemd_id(manager, system_id):
             return dp_ids
 
         for bridge in bridges.rows.itervalues():
-            datapath_ids = bridge.get('datapath_id', [])
+            datapath_ids = bridge.datapath_id
             dp_ids.extend(int(dp_id, 16) for dp_id in datapath_ids)
 
         return dp_ids
