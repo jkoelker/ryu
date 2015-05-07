@@ -109,8 +109,12 @@ def get_datapath_ids_for_systemd_id(manager, system_id):
     def _get_dp_ids(tables):
         dp_ids = []
 
-        bridges = tables.get('Bridge', {})
-        for bridge in bridges.itervalues():
+        bridges = tables.get('Bridge')
+
+        if not bridges:
+            return dp_ids
+
+        for bridge in bridges.rows.itervalues():
             datapath_ids = bridge.get('datapath_id', [])
             dp_ids.extend(int(dp_id, 16) for dp_id in datapath_ids)
 
