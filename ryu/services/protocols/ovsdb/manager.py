@@ -111,4 +111,4 @@ class OVSDB(app_manager.RyuApp):
             rep = event.EventReadReply(self.system_id, None, msg)
             return self.reply_to_request(ev, rep)
 
-        return remote.read_request_func_handler(ev)
+        return remote.read_request_handler(ev)
