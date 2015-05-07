@@ -105,6 +105,22 @@ def get_bridge_by_datapath_id(manager, system_id, datapath_id, fn=None):
     return bridge
 
 
+def get_datapath_ids_for_systemd_id(manager, system_id):
+    def _get_dp_ids(tables):
+        dp_ids = []
+
+        bridges = tables.get('Bridge', {})
+        for bridge in bridges.itervalues():
+            datapath_ids = bridge.get('datapath_id', [])
+            dp_ids.extend(int(dp_id, 16) for dp_id in datapath_ids)
+
+        return dp_ids
+
+    request = ovsdb_event.EventReadRequest(system_id, _get_dp_ids)
+    reply = manager.send_request(request)
+    return reply.result
+
+
 def get_bridges_by_system_id(manager, system_id):
     return get_table(manager, system_id, 'Bridge').rows.values()
 
