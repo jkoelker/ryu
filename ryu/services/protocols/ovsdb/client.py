@@ -64,7 +64,7 @@ def dictify(row):
         return
 
     return dict([(k, v.to_python(_uuid_to_row))
-                 for k, v in row._data.iteritems()])
+                 for k, v in row._data.items()])
 
 
 def discover_schemas(connection):
@@ -103,7 +103,7 @@ def discover_system_id(idl):
         openvswitch = idl.tables['Open_vSwitch'].rows
 
         if openvswitch:
-            row = openvswitch.get(openvswitch.keys()[0])
+            row = openvswitch.get(list(openvswitch.keys())[0])
             system_id = row.external_ids.get('system-id')
 
     return system_id
@@ -139,8 +139,8 @@ class Idl(idl.Idl):
         self.txn = None
         self._outstanding_txns = {}
 
-        for table in schema.tables.itervalues():
-            for column in table.columns.itervalues():
+        for table in schema.tables.values():
+            for column in table.columns.values():
                 if not hasattr(column, 'alert'):
                     column.alert = True
             table.need_table = False

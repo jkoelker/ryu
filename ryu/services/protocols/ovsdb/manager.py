@@ -77,9 +77,7 @@ class OVSDB(app_manager.RyuApp):
         return t
 
     def stop(self):
-        clients = self._clients.values()
-
-        for client in clients:
+        for client in self._clients.values():
             client.stop()
 
         super(OVSDB, self).stop()
