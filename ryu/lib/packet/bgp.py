@@ -40,6 +40,10 @@ from ryu.lib.pack_utils import msg_pack_into
 
 reduce = six.moves.reduce
 
+ADDPATH_RECEIVE = 1
+ADDPATH_SEND = 2
+ADDPATH_BOTH = 3
+
 BGP_MSG_OPEN = 1
 BGP_MSG_UPDATE = 2
 BGP_MSG_NOTIFICATION = 3
@@ -56,6 +60,7 @@ BGP_CAP_ROUTE_REFRESH = 2  # RFC 2918
 BGP_CAP_CARRYING_LABEL_INFO = 4  # RFC 3107
 BGP_CAP_GRACEFUL_RESTART = 64  # RFC 4724
 BGP_CAP_FOUR_OCTET_AS_NUMBER = 65  # RFC 4893
+BGP_CAP_ADDPATH = 69  # draft-ietf-idr-add-paths-13
 BGP_CAP_ENHANCED_ROUTE_REFRESH = 70  # https://tools.ietf.org/html/\
 # draft-ietf-idr-bgp-enhanced-route-refresh-05
 BGP_CAP_ROUTE_REFRESH_CISCO = 128  # in cisco routers, there are two\
@@ -715,7 +720,7 @@ class BGPFourOctetAsRD(_RouteDistinguisher):
 class _AddrPrefix(StringifyMixin):
     _PACK_STR = '!B'  # length
 
-    def __init__(self, length, addr, prefixes=None):
+    def __init__(self, length, addr, prefixes=None, path_ident=None):
         # length is on-wire bit length of prefixes+addr.
         assert prefixes != ()
         if isinstance(addr, tuple):
@@ -726,6 +731,7 @@ class _AddrPrefix(StringifyMixin):
         if prefixes:
             addr = prefixes + (addr,)
         self.addr = addr
+        self.path_ident = path_ident
 
     @staticmethod
     @abc.abstractmethod
@@ -738,15 +744,22 @@ class _AddrPrefix(StringifyMixin):
         pass
 
     @classmethod
-    def parser(cls, buf):
-        (length, ) = struct.unpack_from(cls._PACK_STR, six.binary_type(buf))
+    def parser(cls, buf, addpath=False):
+        buf = six.binary_type(buf)
+        path_ident = None
+
+        if addpath:
+            (path_ident, ) = struct.unpack_from('!I', buf)
+            buf = buf[4:]
+
+        (length, ) = struct.unpack_from(cls._PACK_STR, buf)
         rest = buf[struct.calcsize(cls._PACK_STR):]
         byte_length = (length + 7) // 8
         addr = cls._from_bin(rest[:byte_length])
         rest = rest[byte_length:]
-        return cls(length=length, addr=addr), rest
+        return cls(length=length, addr=addr, path_ident=path_ident), rest
 
-    def serialize(self):
+    def serialize(self, addpath=False):
         # fixup
         byte_length = (self.length + 7) // 8
         bin_addr = self._to_bin(self.addr)
@@ -762,7 +775,13 @@ class _AddrPrefix(StringifyMixin):
         self.addr = self._from_bin(bin_addr)
 
         buf = bytearray()
-        msg_pack_into(self._PACK_STR, buf, 0, self.length)
+
+        offset = 0
+        if addpath and self.path_ident is not None:
+            msg_pack_into('!I', buf, offset, self.path_ident)
+            offset = 4
+
+        msg_pack_into(self._PACK_STR, buf, offset, self.length)
         return buf + bytes(bin_addr)
 
 
@@ -900,7 +919,7 @@ class _IP6AddrPrefix(_AddrPrefix):
 class _VPNAddrPrefix(_AddrPrefix):
     _RD_PACK_STR = '!Q'
 
-    def __init__(self, length, addr, prefixes=(), route_dist=0):
+    def __init__(self, length, addr, prefixes=(), route_dist=0, **kwargs):
         if isinstance(addr, tuple):
             # for _AddrPrefix.parser
             assert not route_dist
@@ -916,7 +935,8 @@ class _VPNAddrPrefix(_AddrPrefix):
         prefixes = prefixes + (route_dist,)
         super(_VPNAddrPrefix, self).__init__(prefixes=prefixes,
                                              length=length,
-                                             addr=addr)
+                                             addr=addr,
+                                             **kwargs)
 
     @classmethod
     def _prefix_to_bin(cls, addr):
@@ -1101,7 +1121,7 @@ class RouteTargetMembershipNLRI(StringifyMixin):
         return (self.afi, self.safi) == (other.afi, other.safi)
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, addpath=False):
         idx = 0
 
         # Extract origin AS.
@@ -1112,7 +1132,7 @@ class RouteTargetMembershipNLRI(StringifyMixin):
         route_target = _ExtendedCommunity(buf[idx:])
         return cls(origin_as, route_target)
 
-    def serialize(self):
+    def serialize(self, addpath=False):
         rt_nlri = ''
         if not self.is_default_rtnlri():
             rt_nlri += struct.pack('!I', self.origin_as)
@@ -1268,6 +1288,73 @@ class BGPOptParamCapabilityCiscoRouteRefresh(_OptParamEmptyCapability):
 @_OptParamCapability.register_type(BGP_CAP_ENHANCED_ROUTE_REFRESH)
 class BGPOptParamCapabilityEnhancedRouteRefresh(_OptParamEmptyCapability):
     pass
+
+
+class AddPathValue(tuple):
+    __slots__ = ()
+
+    def __new__(self, afi, safi, sendreceive):
+        return tuple.__new__(AddPathValue, (afi, safi, sendreceive))
+
+    @property
+    def afi(self):
+        return self[0]
+
+    @property
+    def safi(self):
+        return self[1]
+
+    @property
+    def sendreceive(self):
+        return self[2]
+
+    @property
+    def both(self):
+        return self.sendreceive == ADDPATH_BOTH
+
+    @property
+    def receive(self):
+        return (self.sendreceive & ADDPATH_RECEIVE) == ADDPATH_RECEIVE
+
+    @property
+    def send(self):
+        return (self.sendreceive & ADDPATH_SEND) == ADDPATH_SEND
+
+
+@_OptParamCapability.register_type(BGP_CAP_ADDPATH)
+class BGPOptParamCapabilityAddPath(_OptParamCapability):
+    _CAP_PACK_STR = '!HBB'
+
+    def __init__(self, values):
+        self.values = values
+
+    @classmethod
+    def parse_cap_value(cls, buf):
+        values = []
+        buf = six.binary_type(buf)
+
+        while len(buf) >= 4:
+            afi_safi_sendreceive = struct.unpack_from(cls._CAP_PACK_STR,
+                                                      buf)
+            values.append(AddPathValue(*afi_safi_sendreceive))
+
+        return {'values': values}
+
+    def serialize_cap_value(self):
+        buf = bytearray()
+
+        offset = 0
+        for value in self.values:
+            msg_pack_into(self._CAP_PACK_STR, buf, offset,
+                          value.afi, value.safi, value._sendreceive)
+            offset = offset + 4
+
+        return buf
+
+    def value(self, afi, safi):
+        for value in self.values:
+            if value.afi == afi and value.safi == safi:
+                return value
 
 
 @_OptParamCapability.register_type(BGP_CAP_GRACEFUL_RESTART)
@@ -2196,7 +2283,7 @@ class BGPMessage(packet_base.PacketBase, _TypeDisp):
         self.type = type_
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         if len(buf) < cls._HDR_LEN:
             raise stream_parser.StreamParser.TooSmallException(
                 '%d < %d' % (len(buf), cls._HDR_LEN))
@@ -2209,8 +2296,8 @@ class BGPMessage(packet_base.PacketBase, _TypeDisp):
         binmsg = buf[cls._HDR_LEN:msglen]
         rest = buf[msglen:]
         subcls = cls._lookup_type(type_)
-        kwargs = subcls.parser(binmsg)
-        return subcls(marker=marker, len_=len_, type_=type_, **kwargs), rest
+        subkwargs = subcls.parser(binmsg, **kwargs)
+        return subcls(marker=marker, len_=len_, type_=type_, **subkwargs), rest
 
     def serialize(self):
         # fixup
@@ -2278,7 +2365,7 @@ class BGPOpen(BGPMessage):
         self.opt_param = opt_param
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         (version,
          my_as,
          hold_time,
@@ -2360,7 +2447,7 @@ class BGPUpdate(BGPMessage):
                  total_path_attribute_len=None,
                  path_attributes=None,
                  nlri=None,
-                 len_=None, marker=None):
+                 len_=None, marker=None, addpath=False):
         withdrawn_routes = withdrawn_routes if withdrawn_routes else []
         path_attributes = path_attributes if path_attributes else []
         nlri = nlri if nlri else []
@@ -2373,6 +2460,7 @@ class BGPUpdate(BGPMessage):
         for attr in path_attributes:
             self._pathattr_map[attr.type] = attr
         self.nlri = nlri
+        self.addpath = addpath
 
     @property
     def pathattr_map(self):
@@ -2382,7 +2470,7 @@ class BGPUpdate(BGPMessage):
         return self._pathattr_map.get(attr_name)
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         offset = 0
         buf = six.binary_type(buf)
         (withdrawn_routes_len,) = struct.unpack_from('!H', buf, offset)
@@ -2404,7 +2492,7 @@ class BGPUpdate(BGPMessage):
         offset += 2 + total_path_attribute_len
         nlri = []
         while binnlri:
-            n, binnlri = BGPNLRI.parser(binnlri)
+            n, binnlri = BGPNLRI.parser(binnlri, **kwargs)
             nlri.append(n)
         return {
             "withdrawn_routes_len": withdrawn_routes_len,
@@ -2412,13 +2500,14 @@ class BGPUpdate(BGPMessage):
             "total_path_attribute_len": total_path_attribute_len,
             "path_attributes": path_attributes,
             "nlri": nlri,
+            "addpath": kwargs.get('addpath', False),
         }
 
     def serialize_tail(self):
         # fixup
         binroutes = bytearray()
         for r in self.withdrawn_routes:
-            binroutes += r.serialize()
+            binroutes += r.serialize(addpath=self.addpath)
         self.withdrawn_routes_len = len(binroutes)
         binpathattrs = bytearray()
         for pa in self.path_attributes:
@@ -2426,7 +2515,7 @@ class BGPUpdate(BGPMessage):
         self.total_path_attribute_len = len(binpathattrs)
         binnlri = bytearray()
         for n in self.nlri:
-            binnlri += n.serialize()
+            binnlri += n.serialize(addpath=self.addpath)
 
         msg = bytearray()
         offset = 0
@@ -2465,7 +2554,7 @@ class BGPKeepAlive(BGPMessage):
                                            type_=type_)
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         return {}
 
     def serialize_tail(self):
@@ -2544,7 +2633,7 @@ class BGPNotification(BGPMessage):
         self.data = data
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         (error_code, error_subcode,) = struct.unpack_from(cls._PACK_STR,
                                                           six.binary_type(buf))
         data = bytes(buf[2:])
@@ -2600,7 +2689,7 @@ class BGPRouteRefresh(BGPMessage):
         self.eor_sent = False
 
     @classmethod
-    def parser(cls, buf):
+    def parser(cls, buf, **kwargs):
         (afi, demarcation, safi,) = struct.unpack_from(cls._PACK_STR,
                                                        six.binary_type(buf))
         return {
