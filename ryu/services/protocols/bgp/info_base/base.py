@@ -38,6 +38,8 @@ from ryu.services.protocols.bgp.constants import VRF_TABLE
 from ryu.services.protocols.bgp.model import OutgoingRoute
 from ryu.services.protocols.bgp.processor import BPR_ONLY_PATH
 from ryu.services.protocols.bgp.processor import BPR_UNKNOWN
+from ryu.services.protocols.bgp.processor import BgpProcessorError
+from ryu.services.protocols.bgp.processor import compute_best_path
 
 
 LOG = logging.getLogger('bgpspeaker.info_base.base')
@@ -536,8 +538,9 @@ class Destination(object):
         for withdraw in self._withdraw_list:
             match = None
             for path in self._known_path_list:
-                # We have a match if the source are same.
-                if path.source == withdraw.source:
+                # We have a match if the source and path_ident are same.
+                if (path.source == withdraw.source and
+                        path.path_ident == withdraw.path_ident):
                     match = path
                     matches.add(path)
                     w_matches.add(withdraw)
@@ -571,11 +574,12 @@ class Destination(object):
         for new_path in new_paths:
             old_paths = []
             for path in known_paths:
-                # Here we just check if source is same and not check if path
-                # version num. as new_paths are implicit withdrawal of old
-                # paths and when doing RouteRefresh (not EnhancedRouteRefresh)
-                # we get same paths again.
-                if new_path.source == path.source:
+                # Here we just check if source and path_ident are the same
+                # and not check if path version num. as new_paths are implicit
+                # withdrawal of old paths and when doing RouteRefresh (not
+                # EnhancedRouteRefresh) we get same paths again.
+                if (new_path.source == path.source and
+                        new_path.path_ident == path.path_ident):
                     old_paths.append(path)
                     break
 
@@ -590,26 +594,31 @@ class Destination(object):
         Returns current best path among `known_paths`.
         """
         if not self._known_path_list:
-            from ryu.services.protocols.bgp.processor import BgpProcessorError
             raise BgpProcessorError(desc='Need at-least one known path to'
                                     ' compute best path')
 
-        # We pick the first path as current best path. This helps in breaking
-        # tie between two new paths learned in one cycle for which best-path
-        # calculation steps lead to tie.
-        current_best_path = self._known_path_list[0]
-        best_path_reason = BPR_ONLY_PATH
-        for next_path in self._known_path_list[1:]:
-            from ryu.services.protocols.bgp.processor import compute_best_path
-            # Compare next path with current best path.
-            new_best_path, reason = \
-                compute_best_path(self._core_service.asn, current_best_path,
-                                  next_path)
-            best_path_reason = reason
-            if new_best_path is not None:
-                current_best_path = new_best_path
+        def cmp_best_path(path1, path2):
+            best_path, reason = compute_best_path(self._core_service.asn,
+                                                  path1, path2)
+            if path1 == best_path:
+                return -1
 
-        return current_best_path, best_path_reason
+            elif path2 == best_path:
+                return 1
+
+            return 0
+
+        # NOTE(jkoelker) sort the known paths in best order
+        self._known_path_list.sort(key=functools.cmp_to_key(cmp_best_path))
+
+        if len(self._known_path_list) == 1:
+            return self._known_path_list[0], BPR_ONLY_PATH
+
+        # NOTE(jkoelker) Extract the reason for [0] being the best path
+        best_path_reason = compute_best_path(self._core_service.asn,
+                                             self._known_path_list[0],
+                                             self._known_path_list[1])[1]
+        return (self._known_path_list[0], best_path_reason)
 
     def withdraw_unintresting_paths(self, interested_rts):
         """Withdraws paths that are no longer interesting.
@@ -673,11 +682,12 @@ class Path(object):
     __metaclass__ = ABCMeta
     __slots__ = ('_source', '_path_attr_map', '_nlri', '_source_version_num',
                  '_exported_from', '_nexthop', 'next_path', 'prev_path',
-                 '_is_withdraw', 'med_set_by_target_neighbor')
+                 '_is_withdraw', 'med_set_by_target_neighbor', 'path_ident')
     ROUTE_FAMILY = RF_IPv4_UC
 
     def __init__(self, source, nlri, src_ver_num, pattrs=None, nexthop=None,
-                 is_withdraw=False, med_set_by_target_neighbor=False):
+                 is_withdraw=False, med_set_by_target_neighbor=False,
+                 path_ident=0):
         """Initializes Ipv4 path.
 
         If this path is not a withdraw, then path attribute and nexthop both
@@ -738,6 +748,8 @@ class Path(object):
         # self.next_path
         # self.prev_path
 
+        self.path_ident = path_ident
+
         # The Destination from which this path was exported, if any.
         self._exported_from = None
 
@@ -755,6 +767,7 @@ class Path(object):
 
     @property
     def nlri(self):
+        self._nlri.path_ident = self.path_ident
         return self._nlri
 
     @property
@@ -786,7 +799,8 @@ class Path(object):
             self.source_version_num,
             pattrs=pathattrs,
             nexthop=self.nexthop,
-            is_withdraw=for_withdrawal
+            is_withdraw=for_withdrawal,
+            path_ident=self.path_ident
         )
         return clone
 

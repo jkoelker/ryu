@@ -17,21 +17,28 @@
  Running or runtime configuration related to bgp peers/neighbors.
 """
 from abc import abstractmethod
+import collections
 import logging
 import netaddr
 import numbers
 
+from ryu.lib.packet.bgp import ADDPATH_RECEIVE
+from ryu.lib.packet.bgp import ADDPATH_SEND
+from ryu.lib.packet.bgp import ADDPATH_BOTH
 from ryu.lib.packet.bgp import RF_IPv4_UC
 from ryu.lib.packet.bgp import RF_IPv6_UC
 from ryu.lib.packet.bgp import RF_IPv4_VPN
 from ryu.lib.packet.bgp import RF_IPv6_VPN
 from ryu.lib.packet.bgp import RF_RTC_UC
+from ryu.lib.packet.bgp import BGPOptParamCapabilityAddPath
 from ryu.lib.packet.bgp import BGPOptParamCapabilityEnhancedRouteRefresh
 from ryu.lib.packet.bgp import BGPOptParamCapabilityMultiprotocol
 from ryu.lib.packet.bgp import BGPOptParamCapabilityRouteRefresh
+from ryu.lib.packet.bgp import BGP_CAP_ADDPATH
 from ryu.lib.packet.bgp import BGP_CAP_ENHANCED_ROUTE_REFRESH
 from ryu.lib.packet.bgp import BGP_CAP_MULTIPROTOCOL
 from ryu.lib.packet.bgp import BGP_CAP_ROUTE_REFRESH
+from ryu.lib.packet.bgp import RouteFamily
 
 from ryu.services.protocols.bgp.base import OrderedDict
 from ryu.services.protocols.bgp.rtconf.base import ADVERTISE_PEER_AS
@@ -68,6 +75,8 @@ from ryu.services.protocols.bgp.info_base.base import AttributeMap
 LOG = logging.getLogger('bgpspeaker.rtconf.neighbor')
 
 # Various neighbor settings.
+CAP_ADDPATH = 'cap_addpath'
+CAP_ADDPATH_NUM = 'cap_num_addpaths'
 REMOTE_AS = 'remote_as'
 IP_ADDRESS = 'ip_address'
 ENABLED = 'enabled'
@@ -88,6 +97,7 @@ CONNECT_MODE_PASSIVE = 'passive'
 CONNECT_MODE_BOTH = 'both'
 
 # Default value constants.
+DEFAULT_CAP_ADDPATH = False
 DEFAULT_CAP_GR_NULL = True
 DEFAULT_CAP_REFRESH = True
 DEFAULT_CAP_ENHANCED_REFRESH = False
@@ -108,6 +118,76 @@ DEFAULT_CONNECT_MODE = CONNECT_MODE_BOTH
 # Default value for *MAX_PREFIXES* setting is set to 0.
 DEFAULT_MAX_PREFIXES = 0
 DEFAULT_ADVERTISE_PEER_AS = False
+
+
+def validate_route_family(route_family):
+    if isinstance(route_family, (tuple, list)):
+        if len(route_family) < 2:
+            desc = 'Addpath RouteFamily invalid: %s' % route_family
+            raise ConfigTypeError(desc=desc)
+
+        route_family = RouteFamily(route_family[0], route_family[1])
+
+    if not isinstance(route_family.afi, numbers.Integral):
+        desc = ('Addpath AFI is not an integer: %s (%s)' %
+                (route_family.afi, route_family))
+        raise ConfigTypeError(desc=desc)
+
+    if not isinstance(route_family.safi, numbers.Integral):
+        desc = ('Addpath SAFI is not an integer: %s (%s)' %
+                (route_family.safi, route_family))
+        raise ConfigTypeError(desc=desc)
+
+    return route_family
+
+
+@validate(name=CAP_ADDPATH)
+def validate_addpath(values):
+    valid_values = (ADDPATH_RECEIVE, ADDPATH_SEND, ADDPATH_BOTH)
+
+    if not values:
+        values = {}
+
+    if not isinstance(values, dict):
+        raise ConfigValueError(desc='cap_addpath is not a dictionary')
+
+    validated = {}
+    for route_family, value in values.items():
+        route_family = validate_route_family(route_family)
+
+        if not isinstance(value, numbers.Integral):
+            desc = ('Addpath SENDRECEIVE is not an integer: '
+                    '%s (%s)' % (value, route_family))
+            raise ConfigTypeError(desc=desc)
+
+        if value not in valid_values:
+            desc = ('Addpath SENDRECEIVE is not one of %s: '
+                    '%s (%s)' % (valid_values, value, route_family))
+            raise ConfigTypeError(desc=desc)
+
+        validated[route_family] = value
+
+    return validated
+
+
+@validate(name=CAP_ADDPATH_NUM)
+def validate_addpath_num(values):
+    if not values:
+        values = {}
+
+    if not isinstance(values, dict):
+        raise ConfigValueError(desc='cap_addpath_num is not a dictionary')
+
+    validated = collections.defaultdict(lambda: 2)
+    for route_family, value in values.items():
+        route_family = validate_route_family(route_family)
+
+        if not isinstance(value, numbers.Integral):
+            value = bool(value)
+
+        validated[route_family] = value
+
+    return validated
 
 
 @validate(name=ENABLED)
@@ -292,8 +372,8 @@ class NeighborConf(ConfWithId, ConfWithStats):
     VALID_EVT = frozenset([UPDATE_ENABLED_EVT, UPDATE_MED_EVT,
                            UPDATE_CONNECT_MODE_EVT])
     REQUIRED_SETTINGS = frozenset([REMOTE_AS, IP_ADDRESS])
-    OPTIONAL_SETTINGS = frozenset([CAP_REFRESH,
-                                   CAP_ENHANCED_REFRESH,
+    OPTIONAL_SETTINGS = frozenset([CAP_ADDPATH, CAP_ADDPATH_NUM,
+                                   CAP_REFRESH, CAP_ENHANCED_REFRESH,
                                    CAP_MBGP_IPV4, CAP_MBGP_IPV6,
                                    CAP_MBGP_VPNV4, CAP_MBGP_VPNV6,
                                    CAP_RTC, RTC_AS, HOLD_TIME,
@@ -309,6 +389,10 @@ class NeighborConf(ConfWithId, ConfWithStats):
         super(NeighborConf, self).__init__(**kwargs)
 
     def _init_opt_settings(self, **kwargs):
+        self._settings[CAP_ADDPATH] = compute_optional_conf(
+            CAP_ADDPATH, DEFAULT_CAP_ADDPATH, **kwargs)
+        self._settings[CAP_ADDPATH_NUM] = compute_optional_conf(
+            CAP_ADDPATH_NUM, {}, **kwargs)
         self._settings[CAP_REFRESH] = compute_optional_conf(
             CAP_REFRESH, DEFAULT_CAP_REFRESH, **kwargs)
         self._settings[CAP_ENHANCED_REFRESH] = compute_optional_conf(
@@ -437,8 +521,16 @@ class NeighborConf(ConfWithId, ConfWithStats):
     # =========================================================================
 
     @property
+    def addpath_num(self):
+        return self._settings[CAP_ADDPATH_NUM]
+
+    @property
     def hold_time(self):
         return self._settings[HOLD_TIME]
+
+    @property
+    def cap_addpath(self):
+        return self._settings[CAP_ADDPATH]
 
     @property
     def cap_refresh(self):
@@ -589,6 +681,12 @@ class NeighborConf(ConfWithId, ConfWithStats):
         if self.cap_enhanced_refresh:
             capabilities[BGP_CAP_ENHANCED_ROUTE_REFRESH] = [
                 BGPOptParamCapabilityEnhancedRouteRefresh()]
+
+        if self.cap_addpath:
+            values = ((rf.afi, rf.sai, value)
+                      for rf, value in self.cap_addpath)
+            capabilities[BGP_CAP_ADDPATH] = [
+                BGPOptParamCapabilityAddPath(values)]
 
         return capabilities
 

@@ -34,6 +34,7 @@ from ryu.lib.packet.bgp import BGP_MSG_UPDATE
 from ryu.lib.packet.bgp import BGP_MSG_KEEPALIVE
 from ryu.lib.packet.bgp import BGP_MSG_NOTIFICATION
 from ryu.lib.packet.bgp import BGP_MSG_ROUTE_REFRESH
+from ryu.lib.packet.bgp import BGP_CAP_ADDPATH
 from ryu.lib.packet.bgp import BGP_CAP_ENHANCED_ROUTE_REFRESH
 from ryu.lib.packet.bgp import BGP_CAP_MULTIPROTOCOL
 from ryu.lib.packet.bgp import BGP_ERROR_HOLD_TIMER_EXPIRED
@@ -160,6 +161,53 @@ class BgpProtocol(Protocol, Activity):
         local_id = self.sent_open_msg.bgp_identifier
         return from_inet_ptoi(local_id) > from_inet_ptoi(remote_id)
 
+    def _get_cap_lists(self, cap_code):
+        if not self.recv_open_msg:
+            raise ValueError('Did not yet receive peers open message.')
+
+        local_cap = [cap for cap in self.sent_open_msg.opt_param
+                     if cap.cap_code == cap_code]
+        peer_cap = [cap for cap in self.recv_open_msg.opt_param
+                    if cap.cap_code == cap_code]
+
+        return local_cap, peer_cap
+
+    def _get_cap(self, cap_code):
+        if not self.recv_open_msg:
+            raise ValueError('Did not yet receive peers open message.')
+
+        local_cap, peer_cap = self._get_cap_lists(cap_code)
+
+        if local_cap:
+            local_cap = local_cap[0]
+
+        if peer_cap:
+            peer_cap = peer_cap[0]
+
+        return local_cap, peer_cap
+
+    def is_addpath_valid(self, route_family, send=False, receive=False):
+        """Checks if add path capability is enabled/valid.
+
+        Checks sent and received `Open` message to see if this session with
+        the peer is capable of path ident for the specified afi, safi, and
+        direction.
+        """
+        local_cap, peer_cap = self._get_cap(BGP_CAP_ADDPATH)
+        afi = route_family.afi
+        safi = route_family.safi
+
+        local_cap_value = local_cap.value(afi, safi)
+        peer_cap_value = peer_cap.value(afi, safi)
+
+        if send and local_cap_value.send and peer_cap_value.receive:
+            return True
+
+        if receive and local_cap_value.receive and peer_cap_value.send:
+            return True
+
+        return False
+
     def is_enhanced_rr_cap_valid(self):
         """Checks is enhanced route refresh capability is enabled/valid.
 
@@ -170,13 +218,8 @@ class BgpProtocol(Protocol, Activity):
             raise ValueError('Did not yet receive peers open message.')
 
         err_cap_enabled = False
-        local_caps = self.sent_open_msg.opt_param
-        peer_caps = self.recv_open_msg.opt_param
 
-        local_cap = [cap for cap in local_caps
-                     if cap.cap_code == BGP_CAP_ENHANCED_ROUTE_REFRESH]
-        peer_cap = [cap for cap in peer_caps
-                    if cap.cap_code == BGP_CAP_ENHANCED_ROUTE_REFRESH]
+        local_cap, peer_cap = self._get_cap(BGP_CAP_ENHANCED_ROUTE_REFRESH)
 
         # Both local and peer should advertise ERR capability for it to be
         # enabled.
@@ -219,24 +262,12 @@ class BgpProtocol(Protocol, Activity):
 
     @property
     def negotiated_afs(self):
-        local_caps = self.sent_open_msg.opt_param
-        remote_caps = self.recv_open_msg.opt_param
-
-        local_mbgp_cap = [cap for cap in local_caps
-                          if cap.cap_code == BGP_CAP_MULTIPROTOCOL]
-        remote_mbgp_cap = [cap for cap in remote_caps
-                           if cap.cap_code == BGP_CAP_MULTIPROTOCOL]
+        local_cap, peer_cap = self._get_cap_lists(BGP_CAP_MULTIPROTOCOL)
 
         # Check MP_BGP capabilities were advertised.
-        if local_mbgp_cap and remote_mbgp_cap:
-            local_families = set([
-                (peer_cap.afi, peer_cap.safi)
-                for peer_cap in local_mbgp_cap
-            ])
-            remote_families = set([
-                (peer_cap.afi, peer_cap.safi)
-                for peer_cap in remote_mbgp_cap
-            ])
+        if local_cap and peer_cap:
+            local_families = set([(cap.afi, cap.safi) for cap in local_cap])
+            remote_families = set([(cap.afi, cap.safi) for cap in peer_cap])
             afi_safi = local_families.intersection(remote_families)
         else:
             afi_safi = set()

@@ -22,6 +22,7 @@ from ryu.lib import hub
 from ryu.services.protocols.bgp.core_manager import CORE_MANAGER
 from ryu.services.protocols.bgp.signals.emit import BgpSignalBus
 from ryu.services.protocols.bgp.api.base import call
+from ryu.services.protocols.bgp.api.base import PATH_IDENT
 from ryu.services.protocols.bgp.api.base import PREFIX
 from ryu.services.protocols.bgp.api.base import NEXT_HOP
 from ryu.services.protocols.bgp.api.base import ROUTE_DISTINGUISHER
@@ -47,6 +48,9 @@ from ryu.services.protocols.bgp.rtconf.base import CAP_MBGP_VPNV6
 from ryu.services.protocols.bgp.rtconf.base import CAP_ENHANCED_REFRESH
 from ryu.services.protocols.bgp.rtconf.base import MULTI_EXIT_DISC
 from ryu.services.protocols.bgp.rtconf.base import SITE_OF_ORIGINS
+from ryu.services.protocols.bgp.rtconf.neighbors import CAP_ADDPATH
+from ryu.services.protocols.bgp.rtconf.neighbors import CAP_ADDPATH_NUM
+from ryu.services.protocols.bgp.rtconf.neighbors import DEFAULT_CAP_ADDPATH
 from ryu.services.protocols.bgp.rtconf.neighbors import DEFAULT_CAP_MBGP_IPV4
 from ryu.services.protocols.bgp.rtconf.neighbors import DEFAULT_CAP_MBGP_VPNV4
 from ryu.services.protocols.bgp.rtconf.neighbors import DEFAULT_CAP_MBGP_VPNV6
@@ -240,7 +244,8 @@ class BGPSpeaker(object):
                      next_hop=None, password=None, multi_exit_disc=None,
                      site_of_origins=None, is_route_server_client=False,
                      is_next_hop_self=False, local_address=None,
-                     local_port=None, connect_mode=DEFAULT_CONNECT_MODE):
+                     local_port=None, connect_mode=DEFAULT_CONNECT_MODE,
+                     enable_addpath=DEFAULT_CAP_ADDPATH, num_paths=None):
         """ This method registers a new neighbor. The BGP speaker tries to
         establish a bgp session with the peer (accepts a connection
         from the peer and also tries to connect to it).
@@ -260,6 +265,13 @@ class BGPSpeaker(object):
 
         ``enable_vpnv6`` enables VPNv6 address family for this
         neighbor. The default is False.
+
+        ``enable_addpath`` enables the addpath capability for this
+        neighbor. The default is False. If not False, must be a dictionary
+        with lib.packet.bgp.RouteFamily(afi, safi) (or a tuple
+        of (afi, safi)) as the keys and one of lib.packet.bgp.ADDPATH_RECEIVE,
+        lib.packet.bgp.ADDPATH_SEND, lib.packet.bgp.ADDPATH_BOTH (or the
+        corrisponding integer) as the value.
 
         ``next_hop`` specifies the next hop IP address. If not
         specified, host's ip address to access to a peer is used.
@@ -291,6 +303,14 @@ class BGPSpeaker(object):
 
         ``local_port`` specifies source TCP port for iBGP peering.
 
+        ``num_paths`` number of paths to send for each RouteFamily specified
+        in enable_addpath. By default each RouteFamily listed in enable_addpath
+        will send the best 2 paths. To override this for a specific
+        RouteFamily, num_paths should be a dictionary with
+        lib.packet.bgp.RouteFamily(afi, safi) (or a tuple of (afi, safi)) as
+        the keys and the maximum number of paths to advirtise as the value.
+        Any non-integer value that is truethy, will advirtise all paths
+        (e.g {lib.packet.bgp.RF_IPv4_UC: 'ALL', lib.packet.bgp.RF_IPv6_UC: 3}).
         """
         bgp_neighbor = {}
         bgp_neighbor[neighbors.IP_ADDRESS] = address
@@ -327,6 +347,10 @@ class BGPSpeaker(object):
 
         if local_port:
             bgp_neighbor[LOCAL_PORT] = local_port
+
+        if enable_addpath:
+            bgp_neighbor[CAP_ADDPATH] = enable_addpath
+            bgp_neighbor[CAP_ADDPATH_NUM] = num_paths
 
         call('neighbor.create', **bgp_neighbor)
 
@@ -392,7 +416,8 @@ class BGPSpeaker(object):
         show['format'] = format
         return call('operator.show', **show)
 
-    def prefix_add(self, prefix, next_hop=None, route_dist=None):
+    def prefix_add(self, prefix, next_hop=None, route_dist=None,
+                   path_ident=None):
         """ This method adds a new prefix to be advertized.
 
         ``prefix`` must be the string representation of an IP network
@@ -410,8 +435,10 @@ class BGPSpeaker(object):
         func_name = 'network.add'
         networks = {}
         networks[PREFIX] = prefix
+
         if next_hop:
             networks[NEXT_HOP] = next_hop
+
         if route_dist:
             func_name = 'prefix.add_local'
             networks[ROUTE_DISTINGUISHER] = route_dist
@@ -425,9 +452,12 @@ class BGPSpeaker(object):
                 networks[NEXT_HOP] = \
                     str(netaddr.IPAddress(next_hop).ipv6())
 
+        if path_ident is not None:
+            networks[PATH_IDENT] = path_ident
+
         return call(func_name, **networks)
 
-    def prefix_del(self, prefix, route_dist=None):
+    def prefix_del(self, prefix, route_dist=None, path_ident=None):
         """ This method deletes a advertized prefix.
 
         ``prefix`` must be the string representation of an IP network
@@ -441,6 +471,7 @@ class BGPSpeaker(object):
         func_name = 'network.del'
         networks = {}
         networks[PREFIX] = prefix
+
         if route_dist:
             func_name = 'prefix.delete_local'
             networks[ROUTE_DISTINGUISHER] = route_dist
@@ -448,6 +479,9 @@ class BGPSpeaker(object):
             rf, p = self._check_rf_and_normalize(prefix)
             networks[ROUTE_FAMILY] = rf
             networks[PREFIX] = p
+
+        if path_ident is not None:
+            networks[PATH_IDENT] = path_ident
 
         call(func_name, **networks)
 

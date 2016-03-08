@@ -41,6 +41,7 @@ VPN_LABEL = 'label'
 API_SYM = 'name'
 ORIGIN_RD = 'origin_rd'
 ROUTE_FAMILY = 'route_family'
+PATH_IDENT = 'path_ident'
 
 # API call registry
 _CALL_REGISTRY = {}

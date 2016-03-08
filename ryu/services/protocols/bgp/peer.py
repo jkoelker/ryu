@@ -825,9 +825,14 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
         pathattr_map = path.pathattr_map
         new_pathattr = []
 
+        nlri_list = [path.nlri]
+        addpath = self._protocol.is_addpath_valid(path.route_family,
+                                                  send=True)
+
         if path.is_withdraw:
             if isinstance(path, Ipv4Path):
-                update = BGPUpdate(withdrawn_routes=[path.nlri])
+                update = BGPUpdate(withdrawn_routes=nlri_list,
+                                   addpath=addpath)
                 return update
             else:
                 mpunreach_attr = BGPPathAttributeMpUnreachNLRI(
@@ -835,7 +840,6 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
                 )
                 new_pathattr.append(mpunreach_attr)
         elif self.is_route_server_client:
-            nlri_list = [path.nlri]
             for pathattr in path.pathattr_map.values():
                 new_pathattr.append(pathattr)
         else:
@@ -847,7 +851,6 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
             community_attr = None
             localpref_attr = None
             unknown_opttrans_attrs = None
-            nlri_list = [path.nlri]
 
             # By default we use BGPS's interface IP with this peer as next_hop.
             if self.is_ebgp_peer():
@@ -1019,7 +1022,8 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
 
         if isinstance(path, Ipv4Path):
             update = BGPUpdate(path_attributes=new_pathattr,
-                               nlri=nlri_list)
+                               nlri=nlri_list,
+                               addpath=addpath)
         else:
             update = BGPUpdate(path_attributes=new_pathattr)
         return update
@@ -1843,12 +1847,21 @@ class Peer(Source, Sink, NeighborConfListener, Activity):
                   ' 1/132')
         # We will enqueue best path from all global destination.
         for route_family, table in global_tables.items():
-            if route_family == RF_RTC_UC:
+            if (route_family == RF_RTC_UC or
+                    not self.is_mbgp_cap_valid(route_family)):
                 continue
-            if self.is_mbgp_cap_valid(route_family):
-                for dest in table.values():
-                    if dest.best_path:
-                        self.communicate_path(dest.best_path)
+
+            addpath = self._protocol.is_addpath_valid(route_family, send=True)
+
+            if addpath:
+                num_paths = self._neigh_conf.addpath_num[route_family]
+
+            else:
+                num_paths = 1
+
+            for dest in table.values():
+                for path in dest.known_paths[:num_paths]:
+                    self.communicate_path(path)
 
     def communicate_path(self, path):
         """Communicates `path` to this peer if it qualifies.

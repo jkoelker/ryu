@@ -496,9 +496,15 @@ class TableCoreManager(object):
         )
 
     def add_to_global_table(self, prefix, nexthop=None,
-                            is_withdraw=False):
+                            is_withdraw=False, path_ident=None):
         src_ver_num = 1
         peer = None
+
+        kwargs = {}
+        if path_ident is not None:
+            path_ident = int(path_ident)
+            kwargs['path_ident'] = path_ident
+
         # set mandatory path attributes
         origin = BGPPathAttributeOrigin(BGP_ATTR_ORIGIN_IGP)
         aspath = BGPPathAttributeAsPath([[]])
@@ -523,7 +529,7 @@ class TableCoreManager(object):
 
         new_path = p(peer, _nlri, src_ver_num,
                      pattrs=pathattrs, nexthop=nexthop,
-                     is_withdraw=is_withdraw)
+                     is_withdraw=is_withdraw, **kwargs)
 
         # add to global ipv4 table and propagates to neighbors
         self.learn_path(new_path)

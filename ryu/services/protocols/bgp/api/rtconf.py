@@ -270,16 +270,16 @@ def get_vrfs_conf():
 
 
 @register(name='network.add')
-def add_network(prefix, next_hop=None):
+def add_network(prefix, next_hop=None, path_ident=None):
     tm = CORE_MANAGER.get_core_service().table_manager
-    tm.add_to_global_table(prefix, next_hop)
+    tm.add_to_global_table(prefix, next_hop, path_ident=path_ident)
     return True
 
 
 @register(name='network.del')
-def del_network(prefix):
+def del_network(prefix, path_ident=None):
     tm = CORE_MANAGER.get_core_service().table_manager
-    tm.add_to_global_table(prefix, is_withdraw=True)
+    tm.add_to_global_table(prefix, is_withdraw=True, path_ident=path_ident)
     return True
 
 # =============================================================================

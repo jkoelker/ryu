@@ -19,6 +19,7 @@ from ryu.lib import hub
 from ryu.app.wsgi import websocket, ControllerBase, WSGIApplication
 from ryu.app.wsgi import rpc_public, WebSocketRPCServer
 from ryu.services.protocols.bgp.api.base import call
+from ryu.services.protocols.bgp.api.base import PATH_IDENT
 from ryu.services.protocols.bgp.api.base import PREFIX
 from ryu.services.protocols.bgp.rtconf.common import LOCAL_AS
 from ryu.services.protocols.bgp.rtconf.common import ROUTER_ID
@@ -63,9 +64,13 @@ class BgpWSJsonRpc(app_manager.RyuApp):
         return {}
 
     @rpc_public('network.add')
-    def _prefix_add(self, prefix='10.20.0.0/24'):
+    def _prefix_add(self, prefix='10.20.0.0/24', path_ident=None):
         networks = {}
         networks[PREFIX] = str(prefix)
+
+        if path_ident is not None:
+            networks[PATH_IDENT] = path_ident
+
         call('network.add', **networks)
         return {}
 
