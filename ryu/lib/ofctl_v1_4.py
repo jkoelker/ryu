@@ -21,7 +21,7 @@ import six
 from ryu.ofproto import ether
 from ryu.ofproto import ofproto_v1_4
 from ryu.ofproto import ofproto_v1_4_parser
-from ryu.lib import hub
+from ryu.lib import ofctl_common
 from ryu.lib import ofctl_utils
 
 LOG = logging.getLogger(__name__)
@@ -348,30 +348,10 @@ def match_vid_to_str(value, mask):
     return value
 
 
-def send_stats_request(dp, stats, waiters, msgs):
-    dp.set_xid(stats)
-    waiters_per_dp = waiters.setdefault(dp.id, {})
-    lock = hub.Event()
-    previous_msg_len = len(msgs)
-    waiters_per_dp[stats.xid] = (lock, msgs)
-    ofctl_utils.send_msg(dp, stats, LOG)
-
-    lock.wait(timeout=DEFAULT_TIMEOUT)
-    current_msg_len = len(msgs)
-
-    while current_msg_len > previous_msg_len:
-        previous_msg_len = current_msg_len
-        lock.wait(timeout=DEFAULT_TIMEOUT)
-        current_msg_len = len(msgs)
-
-    if not lock.is_set():
-        del waiters_per_dp[stats.xid]
-
-
 def get_desc_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPDescStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
     s = {}
 
     for msg in msgs:
@@ -386,7 +366,7 @@ def get_queue_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPQueueStatsRequest(dp, 0, ofp.OFPP_ANY,
                                                    ofp.OFPQ_ALL)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     desc = []
     for msg in msgs:
@@ -413,7 +393,7 @@ def get_queue_desc_stats(dp, waiters, port_no=None, queue_id=None):
     stats = dp.ofproto_parser.OFPQueueDescStatsRequest(
         dp, 0, port_no, queue_id)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     configs = []
     for config in msgs:
@@ -453,7 +433,7 @@ def get_flow_stats(dp, waiters, flow=None):
         match)
 
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     flows = []
     for msg in msgs:
@@ -485,7 +465,7 @@ def get_aggregate_flow_stats(dp, waiters, flow=None):
         match)
 
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     flows = []
     for msg in msgs:
@@ -500,7 +480,7 @@ def get_aggregate_flow_stats(dp, waiters, flow=None):
 def get_table_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPTableStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     tables = []
     for msg in msgs:
@@ -517,7 +497,7 @@ def get_table_features(dp, waiters):
     stats = dp.ofproto_parser.OFPTableFeaturesStatsRequest(dp, 0, [])
     msgs = []
     ofproto = dp.ofproto
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     p_type_instructions = [ofproto.OFPTFPT_INSTRUCTIONS,
                            ofproto.OFPTFPT_INSTRUCTIONS_MISS]
@@ -589,7 +569,7 @@ def get_port_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPPortStatsRequest(
         dp, 0, dp.ofproto.OFPP_ANY)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     ports = []
     for msg in msgs:
@@ -611,7 +591,7 @@ def get_meter_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPMeterStatsRequest(
         dp, 0, dp.ofproto.OFPM_ALL)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     meters = []
     for msg in msgs:
@@ -639,7 +619,7 @@ def get_meter_features(dp, waiters):
 
     stats = dp.ofproto_parser.OFPMeterFeaturesStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     features = []
     for msg in msgs:
@@ -671,7 +651,7 @@ def get_meter_config(dp, waiters):
     stats = dp.ofproto_parser.OFPMeterConfigStatsRequest(
         dp, 0, dp.ofproto.OFPM_ALL)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     configs = []
     for msg in msgs:
@@ -698,7 +678,7 @@ def get_group_stats(dp, waiters):
     stats = dp.ofproto_parser.OFPGroupStatsRequest(
         dp, 0, dp.ofproto.OFPG_ALL)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     groups = []
     for msg in msgs:
@@ -746,7 +726,7 @@ def get_group_features(dp, waiters):
 
     stats = dp.ofproto_parser.OFPGroupFeaturesStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     features = []
     for msg in msgs:
@@ -781,7 +761,7 @@ def get_group_features(dp, waiters):
 def get_group_desc(dp, waiters):
     stats = dp.ofproto_parser.OFPGroupDescStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     descs = []
     for msg in msgs:
@@ -806,7 +786,7 @@ def get_group_desc(dp, waiters):
 def get_port_desc(dp, waiters):
     stats = dp.ofproto_parser.OFPPortDescStatsRequest(dp, 0)
     msgs = []
-    send_stats_request(dp, stats, waiters, msgs)
+    ofctl_common.send_stats_request(dp, stats, waiters, msgs, LOG)
 
     descs = []
 
