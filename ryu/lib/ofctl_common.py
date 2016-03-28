@@ -191,3 +191,20 @@ def send_stats_request(dp, stats, waiters, msgs, logger=None):
 
     if not lock.is_set():
         del waiters_per_dp[stats.xid]
+
+
+def send_experimenter(dp, exp, logger=None):
+    experimenter = exp.get('experimenter', 0)
+    exp_type = exp.get('exp_type', 0)
+    data_type = exp.get('data_type', 'ascii')
+
+    if data_type not in ('ascii', 'base64'):
+        LOG.error('Unknown data type: %s', data_type)
+
+    data = exp.get('data', '')
+    if data_type == 'base64':
+        data = base64.b64decode(data)
+
+    expmsg = dp.ofproto_parser.OFPExperimenter(dp, experimenter, exp_type,
+                                               data)
+    ofctl_utils.send_msg(dp, expmsg, logger)

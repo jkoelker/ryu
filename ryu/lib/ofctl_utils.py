@@ -19,6 +19,14 @@ import logging
 LOG = logging.getLogger(__name__)
 
 
+def get_logger(logger=None):
+    # NOTE(jkoelker) use the logger the calling code wants us to
+    if logger is not None:
+        return logger
+
+    return LOG
+
+
 def str_to_int(str_num):
     return int(str(str_num), 0)
 
@@ -27,14 +35,7 @@ def send_msg(dp, msg, logger=None):
     if msg.xid is None:
         dp.set_xid(msg)
 
-    # NOTE(jkoelker) use the logger the calling code wants us to
-    if logger is not None:
-        log = logger
-
-    else:
-        log = LOG
-
-    log.debug('Sending message with xid(%x): %s', msg.xid, msg)
+    get_logger(logger).debug('Sending message with xid(%x): %s', msg.xid, msg)
     dp.send_msg(msg)
 
 
